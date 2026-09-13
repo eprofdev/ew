@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# أسرار ومفاتيح — لا تُرفع أبدًا
+.env
+deploy/.env
+
+# مخرجات التشغيل المحلية (بيانات، نماذج، تقارير)
+monitoring/trading_log.db
+monitoring/exports/
+models/*.json
+!models/.gitkeep

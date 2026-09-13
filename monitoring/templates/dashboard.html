@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>بوت التداول — لوحة المراقبة</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #12161C;
+    --panel: #181D25;
+    --line: #262C36;
+    --text: #E7E5E0;
+    --muted: #8B92A0;
+    --positive: #4C9A79;
+    --negative: #C4544A;
+    --accent: #D8A24A;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Tajawal', sans-serif;
+    line-height: 1.6;
+  }
+  .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+  header {
+    padding: 28px 24px 20px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand h1 { font-size: 1.25rem; font-weight: 700; margin: 0; }
+  .status-dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--muted);
+    display: inline-block;
+  }
+  .status-dot.paper { background: var(--accent); }
+  .status-dot.live { background: var(--positive); }
+  .mode-label { font-size: 0.85rem; color: var(--muted); }
+  .equity-figure { text-align: left; }
+  .equity-figure .label { font-size: 0.8rem; color: var(--muted); margin-bottom: 2px; }
+  .equity-figure .value { font-size: 2rem; font-weight: 700; }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    margin-bottom: 24px;
+  }
+  .stat { background: var(--panel); padding: 16px; }
+  .stat .label { font-size: 0.78rem; color: var(--muted); margin-bottom: 6px; }
+  .stat .value { font-size: 1.4rem; font-weight: 700; }
+  .value.positive { color: var(--positive); }
+  .value.negative { color: var(--negative); }
+
+  section { margin-bottom: 28px; }
+  section h2 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin: 0 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .chart-wrap { background: var(--panel); border: 1px solid var(--line); padding: 16px; }
+
+  .split { display: grid; grid-template-columns: 1.3fr 1fr; gap: 24px; }
+  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  th, td { padding: 9px 6px; text-align: right; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 0.78rem; }
+  .side-buy { color: var(--positive); }
+  .side-sell { color: var(--negative); }
+  .empty-state { color: var(--muted); font-size: 0.88rem; padding: 16px 0; }
+
+  .error-item {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.85rem;
+  }
+  .error-item .ctx { color: var(--accent); margin-bottom: 3px; }
+  .error-item .msg { color: var(--text); }
+  .error-item .ts { color: var(--muted); font-size: 0.76rem; margin-top: 3px; }
+
+  footer { text-align: center; color: var(--muted); font-size: 0.78rem; padding: 20px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="status-dot" id="statusDot"></span>
+    <h1>بوت التداول</h1>
+    <span class="mode-label" id="modeLabel">—</span>
+  </div>
+  <div class="equity-figure">
+    <div class="label">رأس المال الحالي</div>
+    <div class="value num" id="equityValue">—</div>
+  </div>
+</header>
+
+<main>
+  <div class="stats-row" id="statsRow"></div>
+
+  <section>
+    <h2>منحنى رأس المال</h2>
+    <div class="chart-wrap">
+      <canvas id="equityChart" height="90"></canvas>
+    </div>
+  </section>
+
+  <div class="split">
+    <section>
+      <h2>آخر الصفقات</h2>
+      <div id="tradesWrap"></div>
+    </section>
+
+    <section>
+      <h2>سجل الأخطاء</h2>
+      <div id="errorsWrap"></div>
+    </section>
+  </div>
+</main>
+
+<footer>يتحدّث تلقائيًا كل 60 ثانية</footer>
+
+<script>
+let chart;
+
+function fmtMoney(n) {
+  if (n === null || n === undefined) return '—';
+  const sign = n > 0 ? '+' : '';
+  return sign + n.toFixed(2) + '$';
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString('ar-SA', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadData() {
+  const res = await fetch('/api/data');
+  const data = await res.json();
+  render(data);
+}
+
+function render(data) {
+  const r = data.report;
+
+  document.getElementById('equityValue').textContent =
+    r.current_equity !== null ? '$' + r.current_equity.toFixed(2) : '—';
+
+  const dot = document.getElementById('statusDot');
+  const modeLabel = document.getElementById('modeLabel');
+  const latestMode = data.recent_trades[0]?.mode || 'PAPER';
+  dot.className = 'status-dot ' + (latestMode === 'LIVE' ? 'live' : 'paper');
+  modeLabel.textContent = latestMode === 'LIVE' ? 'تنفيذ حقيقي' : 'تجريبي (Paper)';
+
+  const stats = [
+    { label: 'صفقات مفتوحة اليوم', value: r.trades_opened, cls: '' },
+    { label: 'صفقات مغلقة اليوم', value: r.trades_closed, cls: '' },
+    {
+      label: 'صافي الربح/الخسارة',
+      value: fmtMoney(r.total_pnl),
+      cls: r.total_pnl > 0 ? 'positive' : (r.total_pnl < 0 ? 'negative' : '')
+    },
+    { label: 'نسبة الربح', value: r.win_rate_pct !== null ? r.win_rate_pct + '%' : '—', cls: '' },
+    {
+      label: 'أخطاء غير محلولة',
+      value: r.unresolved_errors_total,
+      cls: r.unresolved_errors_total > 0 ? 'negative' : 'positive'
+    },
+  ];
+  document.getElementById('statsRow').innerHTML = stats.map(s => `
+    <div class="stat">
+      <div class="label">${s.label}</div>
+      <div class="value num ${s.cls}">${s.value}</div>
+    </div>
+  `).join('');
+
+  renderTrades(data.recent_trades);
+  renderErrors(data.recent_errors);
+  renderChart(data.equity_curve);
+}
+
+function renderTrades(trades) {
+  const wrap = document.getElementById('tradesWrap');
+  if (!trades.length) {
+    wrap.innerHTML = '<div class="empty-state">ما فيه صفقات مسجلة بعد.</div>';
+    return;
+  }
+  const rows = trades.slice(0, 15).map(t => `
+    <tr>
+      <td>${t.symbol}</td>
+      <td class="${t.side === 'BUY' ? 'side-buy' : 'side-sell'}">${t.side === 'BUY' ? 'شراء' : 'بيع'}</td>
+      <td class="num">${t.price.toFixed(2)}$</td>
+      <td class="num ${t.pnl > 0 ? 'side-buy' : (t.pnl < 0 ? 'side-sell' : '')}">${t.pnl !== null ? fmtMoney(t.pnl) : '—'}</td>
+      <td>${fmtDate(t.timestamp)}</td>
+    </tr>
+  `).join('');
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>الرمز</th><th>النوع</th><th>السعر</th><th>الربح/الخسارة</th><th>الوقت</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderErrors(errors) {
+  const wrap = document.getElementById('errorsWrap');
+  if (!errors.length) {
+    wrap.innerHTML = '<div class="empty-state">لا يوجد أخطاء مسجلة.</div>';
+    return;
+  }
+  wrap.innerHTML = errors.slice(0, 10).map(e => `
+    <div class="error-item">
+      <div class="ctx">${e.context}${e.resolved ? ' ✓' : ''}</div>
+      <div class="msg">${e.error_message}</div>
+      <div class="ts">${fmtDate(e.timestamp)}</div>
+    </div>
+  `).join('');
+}
+
+function renderChart(curve) {
+  const ctx = document.getElementById('equityChart');
+  const labels = curve.map(c => c.date);
+  const values = curve.map(c => c.equity);
+
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        borderColor: '#D8A24A',
+        backgroundColor: 'rgba(216,162,74,0.08)',
+        borderWidth: 2,
+        pointRadius: 3,
+        pointBackgroundColor: '#D8A24A',
+        fill: true,
+        tension: 0.15,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: '#262C36' }, ticks: { color: '#8B92A0' } },
+        y: { grid: { color: '#262C36' }, ticks: { color: '#8B92A0' } },
+      }
+    }
+  });
+}
+
+loadData();
+setInterval(loadData, 60000);
+</script>
+</body>
+</html>

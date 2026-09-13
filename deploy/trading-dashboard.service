@@ -1,0 +1,16 @@
+[Unit]
+Description=Trading Bot Dashboard
+After=network.target
+
+[Service]
+Type=simple
+# عدّل المسارات والمستخدم لما يطابق إعدادك على الـ VPS
+WorkingDirectory=/opt/trading_bot/monitoring
+EnvironmentFile=/opt/trading_bot/deploy/.env
+ExecStart=/usr/bin/python3 dashboard.py
+Restart=on-failure
+RestartSec=5
+User=YOUR_LINUX_USER
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+yfinance
+pandas
+numpy
+alpaca-py
+flask
+requests
+matplotlib
+anthropic
+pytest
