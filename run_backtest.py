@@ -7,18 +7,21 @@ run_backtest.py
     python run_backtest.py TSLA --capital 500 --risk 0.02 --period 2y
 """
 import argparse
-import yfinance as yf
 
 from indicators import add_all_indicators
 from strategy import TrendFollowStrategy
 from backtest import Backtester, print_report
+from data import fetch_data as _fetch_from_provider
 
 
-def fetch_data(symbol: str, period: str = "2y", interval: str = "1d"):
-    df = yf.download(symbol, period=period, interval=interval, auto_adjust=True, progress=False)
-    if isinstance(df.columns, __import__("pandas").MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    return df
+def fetch_data(symbol: str, period: str = "2y", interval: str = "1day"):
+    """
+    جلب الأسعار عبر المزوّد المختار بـDATA_PROVIDER (yahoo | twelvedata | csv).
+
+    الاسم والتوقيع محفوظان كما كانا: كل ملفات المشروع تستورد fetch_data من
+    هنا، فبقيت نقطة الدخول واحدة وتبديل المزوّد صار متغيّر بيئة لا تعديل كود.
+    """
+    return _fetch_from_provider(symbol, period=period, interval=interval)
 
 
 def main():

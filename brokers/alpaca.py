@@ -1,5 +1,5 @@
 """
-alpaca_executor.py
+brokers/alpaca.py
 مرحلة التنفيذ: يربط إشارات الاستراتيجية بحساب Alpaca (Paper أو Live)
 عبر الـ SDK الرسمية alpaca-py.
 
@@ -35,9 +35,14 @@ from alpaca.trading.requests import (
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 
 from strategy import TradeSignal, position_size
+from brokers.base import BrokerExecutor
 
 
-class AlpacaExecutor:
+class AlpacaExecutor(BrokerExecutor):
+    name = "alpaca"
+    supports_paper = True
+    supports_bracket = True
+
     def __init__(self, paper: bool = True):
         api_key = os.environ.get("ALPACA_API_KEY")
         secret_key = os.environ.get("ALPACA_SECRET_KEY")

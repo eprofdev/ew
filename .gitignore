@@ -13,3 +13,7 @@ monitoring/trading_log.db
 monitoring/exports/
 models/*.json
 !models/.gitkeep
+
+# بيانات محلية مخزّنة (لا ترفعها — كبيرة ومتغيّرة)
+data/.cache/
+csv_data/

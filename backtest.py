@@ -12,21 +12,44 @@ class Backtester:
         self.initial_capital = initial_capital
         self.risk_pct = risk_pct
 
-    def run(self, signals: list[TradeSignal]) -> dict:
+    def run(self, signals: list[TradeSignal], signal_filter=None) -> dict:
+        """
+        signal_filter: كائن learning.filter.SignalFilter اختياري.
+        لما يُمرَّر، كل إشارة شراء تمر عليه أولاً: يرفض الضعيفة ويقلّص حجم
+        المتوسطة. مرّره مبنيًا من نموذج مدرّب على بيانات *سابقة* لهذي الفترة
+        فقط — نموذج شاف نتائج نفس الفترة يعطيك أرقامًا خيالية بلا معنى.
+        (train_model.py يتكفّل بهذا تلقائيًا عبر التقييم الزمني المتدرّج.)
+        """
         capital = self.initial_capital
         equity_curve = [capital]
         trades = []
+        skipped = []
 
         open_trade = None
         for sig in signals:
             if sig.side == "BUY" and open_trade is None:
-                shares = position_size(capital, self.risk_pct, sig.price, sig.stop_loss)
+                decision = signal_filter.evaluate(sig.features) if signal_filter else None
+                if decision is not None and not decision.take:
+                    skipped.append({
+                        "date": sig.date, "price": round(float(sig.price), 2),
+                        "probability": (round(decision.probability, 3)
+                                        if decision.probability is not None else None),
+                        "reason": decision.reason,
+                    })
+                    continue
+
+                size_mult = decision.size_mult if decision else 1.0
+                shares = position_size(capital, self.risk_pct * size_mult,
+                                       sig.price, sig.stop_loss)
                 if shares == 0:
                     continue
                 open_trade = {
                     "entry_date": sig.date, "entry_price": sig.price,
                     "shares": shares, "stop_loss": sig.stop_loss,
                     "take_profit": sig.take_profit,
+                    "probability": (round(decision.probability, 3)
+                                    if decision and decision.probability is not None else None),
+                    "size_mult": round(size_mult, 2),
                 }
             elif sig.side == "SELL" and open_trade is not None:
                 pnl = (sig.price - open_trade["entry_price"]) * open_trade["shares"]
@@ -40,6 +63,8 @@ class Backtester:
                     "pnl": round(pnl, 2),
                     "pnl_pct": round(pnl / (open_trade["entry_price"] * open_trade["shares"]) * 100, 2),
                     "reason": sig.reason,
+                    "probability": open_trade["probability"],
+                    "size_mult": open_trade["size_mult"],
                 })
                 equity_curve.append(capital)
                 open_trade = None
@@ -58,6 +83,8 @@ class Backtester:
             "avg_loss": round(sum(t["pnl"] for t in losses) / len(losses), 2) if losses else 0,
             "max_drawdown_pct": self._max_drawdown(equity_curve),
             "trades": trades,
+            "skipped_by_filter": len(skipped),
+            "skipped": skipped,
         }
         return results
 
@@ -84,6 +111,8 @@ def print_report(results: dict, symbol: str):
     print(f"متوسط الربح للصفقة:     ${results['avg_win']}")
     print(f"متوسط الخسارة للصفقة:   ${results['avg_loss']}")
     print(f"أقصى تراجع (Drawdown):  {results['max_drawdown_pct']}%")
+    if results.get("skipped_by_filter"):
+        print(f"رفضها فلتر التعلّم:      {results['skipped_by_filter']} إشارة")
     print(f"{'=' * 50}\n")
 
     if results["trades"]:

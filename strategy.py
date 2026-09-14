@@ -17,6 +17,10 @@ class TradeSignal:
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     reason: str = ""
+    # حالة السوق لحظة الإشارة، تملؤها learning.dataset.attach_features لاحقًا.
+    # تُحفظ هنا لا داخل الاستراتيجيات: الاستراتيجيات تبقى بلا أي معرفة
+    # بطبقة التعلّم، وأي استراتيجية جديدة تستفيد منها تلقائيًا.
+    features: Optional[dict] = None
 
 
 class TrendFollowStrategy:

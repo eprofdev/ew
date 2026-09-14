@@ -1,9 +1,24 @@
-yfinance
+# ── أساسيات (إلزامية) ─────────────────────────────────────────────
 pandas
 numpy
-alpaca-py
-flask
 requests
+
+# ── مزوّدو البيانات ───────────────────────────────────────────────
+# Twelve Data لا تحتاج مكتبة خاصة — تعمل عبر requests أعلاه.
+#   DATA_PROVIDER=twelvedata + TWELVEDATA_API_KEY
+# yfinance مطلوبة فقط لـ DATA_PROVIDER=yahoo (الافتراضي)
+yfinance
+
+# ── التنفيذ عبر الوسطاء (اختيارية حسب وسيطك) ──────────────────────
+# Alpaca — يدعم حسابًا تجريبيًا وأوامر Bracket (موصى به للبداية)
+alpaca-py
+# Webull — فعّلها فقط لو ناوي تنفّذ عبر Webull، واقرأ brokers/webull.py أولاً:
+#   pip install webull-python-sdk-core webull-python-sdk-trade webull-python-sdk-mdata
+
+# ── المراقبة والتقارير ────────────────────────────────────────────
+flask
 matplotlib
-anthropic
-pytest
+
+# ── اختيارية ──────────────────────────────────────────────────────
+anthropic   # تحليل Claude التلقائي اليومي
+pytest      # تشغيل الاختبارات
