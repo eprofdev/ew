@@ -1,0 +1,16 @@
+{
+  "name": "دليل قنوات المجد",
+  "short_name": "دليل القنوات",
+  "description": "دليل عربي سريع لقنوات المجد، يعمل على الجوال كتطبيق.",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#16120f",
+  "theme_color": "#c86b4a",
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
