@@ -43,6 +43,8 @@ class NaifSafeguards:
         يرجع True للسهم ذي الهيكل الحاد القابل للانفجار السعري.
         """
         cfg = self.config
+        if not stock_metrics.fundamentals_known:
+            return False  # لا بيانات = لا صفقة (fail-closed)
         return (
             stock_metrics.market_cap <= cfg.max_market_cap
             and stock_metrics.free_float <= cfg.max_free_float
@@ -120,7 +122,14 @@ class NaifSafeguards:
                 Veto("OPTIONS_BLOCKED", "التداول بالعقود محظور — أسهم فقط")
             )
 
-        if not self.filter_micro_cap_structure(m):
+        if not m.fundamentals_known:
+            vetoes.append(
+                Veto(
+                    "DATA_UNAVAILABLE",
+                    "الكاب أو الفلوت غير معروف — ممنوع التخمين في أسهم السنتات",
+                )
+            )
+        elif not self.filter_micro_cap_structure(m):
             vetoes.append(
                 Veto(
                     "STRUCTURE",

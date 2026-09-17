@@ -14,8 +14,11 @@
 ## التشغيل
 
 ```bash
-python -m trading_bot.demo          # مثال كامل ببيانات تركيبية
-python -m unittest discover -s tests  # 31 اختبار وحدة
+python -m trading_bot.demo            # مثال كامل ببيانات تركيبية
+python -m unittest discover -s tests  # 57 اختبار وحدة (بلا شبكة)
+
+export TWELVE_DATA_API_KEY=xxxxxxxx   # فحص حي ببيانات Twelve Data
+python -m trading_bot.scan VSME --equity 10000
 ```
 
 لا توجد أي تبعيات خارجية — بايثون 3.9+ فقط.
@@ -55,23 +58,64 @@ python -m unittest discover -s tests  # 31 اختبار وحدة
 | — | **منع الشراء من العرض**: الأمر يوضع على الطلب (Bid) دائماً |
 | — | **إلغاء القنوات السعرية** (Linear Regression) بسبب كثرة الفجوات |
 
-## الربط ببيانات حقيقية
+## الربط ببيانات Twelve Data الحقيقية
 
-نفّذ بروتوكول `MarketDataProvider` في `data_feed.py` بمزوّدك (Twelve Data،
-Polygon، IBKR...) ثم:
+```bash
+export TWELVE_DATA_API_KEY=xxxxxxxx
+python -m trading_bot.scan VSME ABCD --equity 10000
+python -m trading_bot.scan --watchlist watchlist.txt --fundamentals fund.json --json
+```
+
+أو برمجياً:
 
 ```python
 from trading_bot import EnhancedTradingBot, BotConfig
 from trading_bot.data_feed import build_snapshots
+from trading_bot.providers import TwelveDataProvider
 
+provider = TwelveDataProvider(              # المفتاح من TWELVE_DATA_API_KEY
+    max_requests_per_minute=8,              # حد الخطة المجانية
+    book_source=my_broker_level1,           # دالة تعيد (bid, ask) — انظر أدناه
+)
 bot = EnhancedTradingBot(BotConfig(account_equity=10_000))
-snapshots = build_snapshots(my_provider, ["VSME", "ABCD"])
-for signal in bot.scan(snapshots):
+for signal in bot.scan(build_snapshots(provider, ["VSME", "ABCD"])):
     if signal.is_actionable:
         print(signal.to_alert())
 ```
 
 المحرك يُخرج تنبيهات فقط — لا يرسل أوامر لأي وسيط. ربط التنفيذ قرارك أنت.
+
+### ثلاثة قيود حقيقية في Twelve Data يجب معرفتها
+
+| القيد | الأثر | الحل |
+|---|---|---|
+| **لا يوجد Bid/Ask في REST** — `/quote` تعطي آخر صفقة فقط | صمام «ممنوع الشراء من العرض» لا يجد سعر طلب ⇒ القرار يبقى `WATCH` ولا يصدر أمر | مرّر `book_source=` دالة تعيد `(bid, ask)` من وسيطك أو من WebSocket |
+| **`/statistics` (كاب/فلوت/شورت) تتطلب خطة Pro فأعلى** | الهيكل المالي «غير معروف» ⇒ رفض `DATA_UNAVAILABLE` (لا تخمين) | ملف `--fundamentals fund.json` يدوياً، أو ترقية الخطة |
+| **لا تعطي الواجهة نسبة شورت الشهر السابق** | لا مرجع تاريخي لرصد التقفيل | `ShortInterestStore` يخزّن كل قراءة محلياً، والمرجع التاريخي = أعلى قراءة خلال 90 يوماً |
+
+كذلك: `borrow_fee` وحالة الإيقاف (`halted`) غير متاحتين لدى المزود، و`/time_series`
+ترجع الأحدث أولاً — المزود يعكسها تصاعدياً لأن كل المؤشرات تفترض الترتيب الصاعد.
+
+### ملف الهيكل المالي اليدوي
+
+```json
+{
+  "VSME": {
+    "market_cap": 1450000,
+    "free_float": 980000,
+    "has_active_shelf_offering": false,
+    "has_options": false
+  }
+}
+```
+
+القيم اليدوية تتقدم دائماً على قيم الواجهة (بيانات الفلوت الرسمية أدق من أي تقدير).
+
+### مزوّد آخر؟
+
+نفّذ بروتوكول `MarketDataProvider` في `data_feed.py` (ثلاث دوال فقط:
+`get_candles` / `get_metrics` / `get_realtime`) ومرّره لنفس المحرك دون تعديل
+أي منطق.
 
 ## الضبط
 
@@ -87,9 +131,12 @@ trading_bot/
   indicators.py                      RSI, ATR, SMA/EMA, القيعان المحورية، نسبة الفجوات
   risk.py                            حجم المركز والوقف والأهداف
   engine.py                          المحرك المدمج (EnhancedTradingBot)
-  data_feed.py                       واجهة مزوّد البيانات
+  data_feed.py                       واجهة مزوّد البيانات (بروتوكول)
+  providers/twelve_data.py           مزوّد Twelve Data فعلي (REST)
+  scan.py                            أداة سطر الأوامر للفحص الحي
   demo.py                            مثال تشغيلي بأربع حالات
   strategies/faisal_price_action.py  السلوك السعري على 4 ساعات
   strategies/naif_safeguards.py      صمامات الأمان
-tests/test_bot.py                    31 اختبار وحدة
+tests/test_bot.py                    31 اختبار للمحرك والاستراتيجيتين
+tests/test_twelve_data.py            26 اختبار للمزود (بلا شبكة)
 ```

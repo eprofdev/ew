@@ -62,8 +62,9 @@ class StockMetrics:
     """الهيكل المالي للشركة — يستخدم في فلتر نايف للأسهم الحادة."""
 
     ticker: str
-    market_cap: float
-    free_float: float
+    # None = غير معروف (خطة لا تدعم /statistics) — يُعامَل كرفض وليس كسماح
+    market_cap: Optional[float] = None
+    free_float: Optional[float] = None
     shares_outstanding: float = 0.0
     avg_daily_volume: float = 0.0
     is_otc: bool = False
@@ -71,6 +72,10 @@ class StockMetrics:
     # مؤشرات التخفيف (Dilution) التي تُعلّق السهم
     has_active_shelf_offering: bool = False   # تسجيل S-1/S-3 فعّال
     recent_reverse_split_days: Optional[int] = None  # عدد الأيام منذ آخر Reverse Split
+
+    @property
+    def fundamentals_known(self) -> bool:
+        return self.market_cap is not None and self.free_float is not None
 
 
 @dataclass(frozen=True)
