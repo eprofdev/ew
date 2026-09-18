@@ -1,0 +1,21 @@
+[Unit]
+Description=Local WireGuard-over-WSS bridge
+After=network-online.target
+Wants=network-online.target
+Before=wg-quick@wg0.service
+
+[Service]
+Type=exec
+# Edit these three lines, then: systemctl enable --now wg-wss-client
+Environment=WGWS_URL=wss://vpn.example.com/ws
+Environment=WGWS_TOKEN=replace-me
+Environment=WGWS_CLIENT_LISTEN=127.0.0.1:51820
+WorkingDirectory=/opt/wg-wss
+ExecStart=/bin/sh -c '/usr/bin/python3 -m wgws client "$WGWS_URL"'
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
