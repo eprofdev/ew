@@ -14,9 +14,17 @@ from .models import (
 )
 from .engine import EnhancedTradingBot
 from .config import BotConfig
+from .backtest import BacktestConfig, Backtester, BacktestResult
+from .screener import Candidate, Screener, ScreenerConfig
 
 __all__ = [
+    "BacktestConfig",
+    "BacktestResult",
+    "Backtester",
     "BotConfig",
+    "Candidate",
+    "Screener",
+    "ScreenerConfig",
     "Candle",
     "Decision",
     "EnhancedTradingBot",

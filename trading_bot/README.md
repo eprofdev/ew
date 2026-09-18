@@ -15,7 +15,7 @@
 
 ```bash
 python -m trading_bot.demo            # مثال كامل ببيانات تركيبية
-python -m unittest discover -s tests  # 57 اختبار وحدة (بلا شبكة)
+python -m unittest discover -s tests  # 105 اختبار وحدة (بلا شبكة)
 
 export TWELVE_DATA_API_KEY=xxxxxxxx   # فحص حي ببيانات Twelve Data
 python -m trading_bot.scan VSME --equity 10000
@@ -117,6 +117,77 @@ for signal in bot.scan(build_snapshots(provider, ["VSME", "ABCD"])):
 `get_candles` / `get_metrics` / `get_realtime`) ومرّره لنفس المحرك دون تعديل
 أي منطق.
 
+## قياس الأداء فعلياً (Backtest)
+
+```bash
+python -m trading_bot.backtest_cli AAPL --bars 2000 --market-cap 1500000 --free-float 900000
+python -m trading_bot.backtest_cli AEMD --csv-4h data/AEMD_4h.csv --csv-1d data/AEMD_1d.csv \
+    --market-cap 30000000 --free-float 9000000 --trades
+```
+
+خمسة مبادئ يلتزم بها المحرك، وبدونها تكون الأرقام كذباً مريحاً:
+
+1. **لا استشراف للمستقبل**: عند الشمعة i يرى البوت `candles_4h[:i+1]` والشموع
+   اليومية **المكتملة قبل يوم الشمعة** — لأن شمعة اليوم تحوي إغلاقاً لم يحدث بعد.
+2. **الدخول في الشمعة التالية** وفقط إذا لمس السعر حد الأمر فعلاً.
+3. **الوقف قبل الهدف** عند التعارض داخل الشمعة (الافتراض الأسوأ هو الصادق).
+4. **الفجوة تُنفَّذ على الافتتاح** لا على الوقف — واقع أسهم السنتات.
+5. **العمولة والانزلاق** يُخصمان من كل صفقة.
+
+### المحرك يرفض أن يتظاهر
+
+| ميزة | ماذا تمنع |
+|---|---|
+| مجال ثقة Bootstrap للتوقع | متوسط R جذاب مبني على 3 صفقات |
+| `is_statistically_usable` (حد 30 صفقة) | استنتاج من عينة صغيرة |
+| `trades_needed_for_inference()` | يقول كم صفقة تلزم لدقة ±0.25R |
+| قمع الفرص (funnel) | يكشف أي فلتر يقتل الإشارات فعلاً |
+
+مثال حقيقي من تشغيل على AAPL (1160 شمعة 4 ساعات):
+
+```
+  صفقات مغلقة : 5     التوقع: -0.07R     مجال الثقة: [-1.31R , +1.19R]
+  ⛔ المجال يشمل الصفر — لم تثبت أي أفضلية إحصائية
+  ⛔ العينة 5 صفقة فقط — المطلوب لدقة ±0.25R نحو 139 صفقة
+  قمع الفرص: no_setup 1011 | setup_no_reversal 40 | rsi_rejected 6 | confirmed 16
+```
+
+## اختيار الأسهم (Screener)
+
+قمع بثلاث طبقات في `screener.py`: استبعاد صلب (سعر، سيولة، فلوت، RVOL) ثم
+ترتيب بالنقاط (الفوليوم النسبي 35، ضيق الفلوت 25، الموقع من المدى 15، وقود
+الشورت 15، النطاق السعري 10) ثم عقوبات المخاطر (تجزئة عكسية، عرض أسهم،
+ترويج، وامتداد سعري بالفعل).
+
+**الأوزان فرضية وليست نتيجة مثبتة** — الحكم عليها من الـ backtest وحده.
+
+## تدفق الأوامر و Bookmap
+
+`orderflow/` يسدّ الفجوة الوحيدة المتبقية: Twelve Data لا تعطي Bid/Ask، و
+Bookmap تعطي L1/L2 لحظياً.
+
+| ما تراه في الخريطة الحرارية | ما يقرؤه الكود |
+|---|---|
+| شريط ثابت يبتلع التنفيذات | `absorption_price` — تأكيد الدعم من الدفتر لا من الشمعة |
+| مستوى يُستهلك ويُعاد ملؤه | `iceberg_prices` — مشترٍ كبير يخفي حجمه |
+| كتلة ضخمة فوق السعر | `ask_wall` — رفض الشراء في وجه بائع أكبر |
+| طلب رقيق | `THIN_BID` — سيولة وهمية تظهر عند الخروج |
+
+```python
+from trading_bot.orderflow import BookmapFeed
+feed = BookmapFeed("VSME")
+provider = TwelveDataProvider(book_source=feed.as_book_source())
+```
+
+التشغيل داخل Bookmap عبر `orderflow/bookmap_addon.py` (واجهة Python L1،
+بايثون 3.7). بقية الحزمة **لا تعتمد** على حزمة `bookmap`، فتعمل مع أي مصدر L2.
+
+## جودة البيانات
+
+`dataquality.py` يميّز التجزئة غير المعدّلة عن الخبر الحقيقي **بالفوليوم**:
+تجزئة AEMD 1:5 رافقها فوليوم 0.89× المعدل (تُصحَّح)، وقفزة اندماجها +493%
+رافقها 567× (تُترك كما هي). السعر وحده لا يكفي للتمييز.
+
 ## الضبط
 
 كل الأرقام في `config.py` (`BotConfig`): نطاقات RSI، عرض منطقة الدعم، طول
@@ -133,10 +204,21 @@ trading_bot/
   engine.py                          المحرك المدمج (EnhancedTradingBot)
   data_feed.py                       واجهة مزوّد البيانات (بروتوكول)
   providers/twelve_data.py           مزوّد Twelve Data فعلي (REST)
+  backtest.py                        محرك walk-forward لقياس الأداء
+  backtest_cli.py                    تشغيل الاختبار من سطر الأوامر
+  screener.py                        اختيار الأسهم وترتيبها
+  dataquality.py                     حارس التجزئة وجودة السلاسل
+  csvio.py                           حفظ/تحميل الشموع
+  orderflow/book.py                  دفتر أسعار L2
+  orderflow/bookmap.py               جسر Bookmap وصمامات تدفق الأوامر
+  orderflow/bookmap_addon.py         إضافة تعمل داخل Bookmap
   scan.py                            أداة سطر الأوامر للفحص الحي
   demo.py                            مثال تشغيلي بأربع حالات
   strategies/faisal_price_action.py  السلوك السعري على 4 ساعات
   strategies/naif_safeguards.py      صمامات الأمان
+data/AEMD_*.csv                      بيانات AEMD حقيقية للاختبار المتكرر
 tests/test_bot.py                    31 اختبار للمحرك والاستراتيجيتين
 tests/test_twelve_data.py            26 اختبار للمزود (بلا شبكة)
+tests/test_backtest.py               18 اختبار للـ backtest وجودة البيانات
+tests/test_screener_orderflow.py     30 اختبار للمرشّح وتدفق الأوامر
 ```
