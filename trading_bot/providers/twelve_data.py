@@ -86,28 +86,46 @@ def _to_float(value, default: Optional[float] = None) -> Optional[float]:
 
 
 class _RateLimiter:
-    """حد طلبات بسيط (الخطة المجانية = 8 طلبات/دقيقة)."""
+    """حد **أرصدة** لا طلبات — وهذا هو الفرق الذي يوقع في الخطأ.
+
+    Twelve Data تحد بالأرصدة في الدقيقة (8 على الخطة الأساسية)، والرصيد
+    يُحسب لكل رمز. فطلب مجمّع لخمسين رمزاً يستهلك خمسين رصيداً دفعةً واحدة
+    ويُرفض فوراً مهما كان عدد الطلبات قليلاً. لذلك نحجز بالتكلفة لا بالعدد.
+    """
 
     def __init__(self, max_per_minute: int) -> None:
         self.max_per_minute = max(int(max_per_minute), 0)
-        self._calls: deque = deque()
+        self._calls: deque = deque()   # (وقت، تكلفة)
         self._lock = threading.Lock()
 
-    def acquire(self) -> None:
+    def _used(self, now: float) -> int:
+        while self._calls and now - self._calls[0][0] >= 60:
+            self._calls.popleft()
+        return sum(cost for _, cost in self._calls)
+
+    def acquire(self, cost: int = 1) -> None:
         if not self.max_per_minute:
             return
+        cost = max(int(cost), 1)
         with self._lock:
-            now = time.monotonic()
-            while self._calls and now - self._calls[0] >= 60:
-                self._calls.popleft()
-            if len(self._calls) >= self.max_per_minute:
-                sleep_for = 60 - (now - self._calls[0]) + 0.05
-                if sleep_for > 0:
-                    time.sleep(sleep_for)
+            # تكلفة أكبر من سعة الدقيقة كلها لا يمكن إرضاؤها — ننتظر نافذة
+            # فارغة ونمضي، والمزوّد سيرد بخطأ واضح إن رفضها.
+            budget = min(cost, self.max_per_minute)
+            while True:
                 now = time.monotonic()
-                while self._calls and now - self._calls[0] >= 60:
-                    self._calls.popleft()
-            self._calls.append(time.monotonic())
+                used = self._used(now)
+                if used + budget <= self.max_per_minute or not self._calls:
+                    break
+                sleep_for = 60 - (now - self._calls[0][0]) + 0.05
+                if sleep_for <= 0:
+                    continue
+                time.sleep(sleep_for)
+            self._calls.append((time.monotonic(), cost))
+
+    @property
+    def capacity(self) -> int:
+        """أقصى تكلفة يمكن تمريرها في طلب واحد."""
+        return self.max_per_minute or 10**9
 
 
 class ShortInterestStore:
@@ -208,7 +226,7 @@ class TwelveDataProvider:
         delay = 2.0
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries + 1):
-            self._limiter.acquire()
+            self._limiter.acquire(credits)
             try:
                 request = urllib.request.Request(url, headers={"User-Agent": "trading-bot/1.0"})
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -319,6 +337,13 @@ class TwelveDataProvider:
         symbols = [t.strip().upper() for t in tickers if t and t.strip()]
         if not symbols:
             return {}
+        capacity = self._limiter.capacity
+        if len(symbols) > capacity:
+            # دفعة أكبر من سعة الدقيقة تُرفض حتماً — نقسّمها بدل أن نحرقها
+            out: Dict[str, dict] = {}
+            for start in range(0, len(symbols), capacity):
+                out.update(self.get_quotes(symbols[start : start + capacity]))
+            return out
         if len(symbols) == 1:
             try:
                 return {symbols[0]: self.get_quote(symbols[0])}

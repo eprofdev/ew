@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from trading_bot import Decision, EnhancedTradingBot
 from trading_bot.data_feed import build_snapshot
 from trading_bot.providers.twelve_data import (
     PlanLimitError,
+    _RateLimiter,
     RateLimitError,
     ShortInterestStore,
     SymbolNotFoundError,
@@ -67,11 +69,15 @@ class FakeProvider(TwelveDataProvider):
         self._statistics = statistics
         self.calls = []
 
-    def _request(self, path, params):
+    def _request(self, path, params, credits=1):
         self.calls.append((path, params))
+        self.credits_used += credits
         if path == "time_series":
             return self._check_payload(TIME_SERIES, path)
         if path == "quote":
+            symbols = str(params.get("symbol", "")).split(",")
+            if len(symbols) > 1:
+                return {s: dict(QUOTE, symbol=s) for s in symbols}
             return self._check_payload(QUOTE, path)
         if path == "statistics":
             if self._statistics is None:
@@ -110,6 +116,37 @@ class TestParsing(unittest.TestCase):
         with self.assertRaises(TwelveDataError):  # code غير رقمي لا يُسقط المعالج
             check({"code": "n/a", "message": "weird", "status": "error"}, "quote")
         self.assertEqual(check({"status": "ok", "values": []}, "quote"), {"status": "ok", "values": []})
+
+
+class TestRateLimiter(unittest.TestCase):
+    """الحد على الأرصدة لا الطلبات — الخلط بينهما يحرق الرصيد بلا فائدة."""
+
+    def test_reserves_by_cost_not_by_call_count(self):
+        limiter = _RateLimiter(8)
+        limiter.acquire(5)
+        limiter.acquire(3)
+        self.assertEqual(limiter._used(time.monotonic()), 8)
+
+    def test_capacity_reports_per_minute_limit(self):
+        self.assertEqual(_RateLimiter(8).capacity, 8)
+
+    def test_zero_limit_disables_throttling(self):
+        limiter = _RateLimiter(0)
+        limiter.acquire(1000)          # لا ينتظر ولا يفشل
+        self.assertEqual(limiter.capacity, 10**9)
+
+    def test_old_entries_leave_the_window(self):
+        limiter = _RateLimiter(8)
+        limiter._calls.append((time.monotonic() - 120, 8))   # قديم
+        self.assertEqual(limiter._used(time.monotonic()), 0)
+
+    def test_batch_larger_than_capacity_is_split(self):
+        provider = FakeProvider(max_requests_per_minute=4)
+        symbols = [f"S{i}" for i in range(9)]
+        provider.get_quotes(symbols)
+        sizes = [len(params["symbol"].split(",")) if "," in str(params.get("symbol")) else 1
+                 for path, params in provider.calls if path == "quote"]
+        self.assertTrue(all(size <= 4 for size in sizes), sizes)
 
 
 class TestCandles(unittest.TestCase):
