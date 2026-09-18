@@ -4,3 +4,4 @@ __pycache__/
 data/cache/
 data/*.jsonl
 data/run*/
+.env
