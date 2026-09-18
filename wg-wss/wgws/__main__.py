@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import socket
 import sys
 from urllib.parse import urlsplit
 
@@ -19,6 +20,8 @@ def _add_common(parser):
                         help="secret WebSocket path (default: /ws)")
     parser.add_argument("--token", default=_env("token", ""),
                         help="shared secret sent as an Authorization header")
+    parser.add_argument("--family", choices=("auto", "4", "6"), default="auto",
+                        help="restrict to IPv4 or IPv6 (default: auto)")
     parser.add_argument("--ping-interval", type=float, default=25.0,
                         help="seconds between keepalive pings (default: 25)")
     parser.add_argument("--idle-timeout", type=float, default=600.0,
@@ -37,8 +40,9 @@ def build_parser():
     sub = parser.add_subparsers(dest="mode", required=True)
 
     srv = sub.add_parser("server", help="run on the VPS, next to WireGuard")
-    srv.add_argument("--listen", default=_env("listen", "0.0.0.0:443"),
-                     help="address to listen on (default: 0.0.0.0:443)")
+    srv.add_argument("--listen", default=_env("listen", "0.0.0.0:443,[::]:443"),
+                     help="comma-separated addresses to listen on "
+                          "(default: 0.0.0.0:443,[::]:443 - both families)")
     srv.add_argument("--wg", default=_env("wg", "127.0.0.1:51820"),
                      help="local WireGuard UDP endpoint (default: 127.0.0.1:51820)")
     srv.add_argument("--cert", default=_env("cert"), help="TLS certificate chain (PEM)")
@@ -68,6 +72,9 @@ def build_parser():
     return parser
 
 
+FAMILIES = {"auto": 0, "4": socket.AF_INET, "6": socket.AF_INET6}
+
+
 def _split_hostport(value, default_port):
     if value.startswith("["):  # [::1]:443
         host, _, rest = value[1:].partition("]")
@@ -78,7 +85,26 @@ def _split_hostport(value, default_port):
 
 
 def prepare_server(args):
-    args.listen_host, args.listen_port = _split_hostport(args.listen, 443)
+    args.family = FAMILIES[args.family]
+    args.listen_hosts = []
+    ports = set()
+    for item in args.listen.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        host, port = _split_hostport(item, 443)
+        if args.family == socket.AF_INET and ":" in host:
+            continue
+        if args.family == socket.AF_INET6 and ":" not in host and host != "":
+            continue
+        args.listen_hosts.append(host)
+        ports.add(port)
+    if not args.listen_hosts:
+        raise SystemExit("error: --listen has no address for the chosen --family")
+    if len(ports) > 1:
+        raise SystemExit("error: every --listen address must use the same port")
+    args.listen_port = ports.pop()
+    args.listen_host = args.listen_hosts[0]
     args.wg_host, args.wg_port = _split_hostport(args.wg, 51820)
     if not args.no_tls:
         if not args.cert or not args.key:
@@ -107,6 +133,7 @@ def prepare_client(args):
     args.port = parts.port or (80 if args.no_tls else 443)
     if parts.path and parts.path != "/":
         args.path = parts.path
+    args.family = FAMILIES[args.family]
     args.listen_host, args.listen_port = _split_hostport(args.listen, 51820)
     return args
 

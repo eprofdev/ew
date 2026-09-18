@@ -11,6 +11,8 @@ Environment=WGWS_URL=wss://vpn.example.com/ws
 Environment=WGWS_TOKEN=replace-me
 Environment=WGWS_CLIENT_LISTEN=127.0.0.1:51820
 WorkingDirectory=/opt/wg-wss
+# Python client. For the single-binary Go client use instead:
+#   ExecStart=/opt/wg-wss/wgws-client --listen ${WGWS_CLIENT_LISTEN} ${WGWS_URL}
 ExecStart=/bin/sh -c '/usr/bin/python3 -m wgws client "$WGWS_URL"'
 Restart=always
 RestartSec=2

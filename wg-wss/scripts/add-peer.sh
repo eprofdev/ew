@@ -25,12 +25,27 @@ KEY="$(wg genkey)"
 PUB="$(wg pubkey <<<"$KEY")"
 PSK="$(wg genpsk)"
 
-# Pick the next free address in the server's /24.
-BASE="$(awk -F'[ =/]+' '/^Address/ {print $3}' "$CONF" | head -1 | cut -d. -f1-3)"
+# Pick the next free host number, in both families the interface carries.
+ADDR_LINE="$(grep -m1 '^Address' "$CONF")"
+BASE="$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' <<<"$ADDR_LINE" | head -1 | cut -d. -f1-3)"
+[[ -n "$BASE" ]] || { echo "no IPv4 address found in $CONF" >&2; exit 1; }
 USED="$(grep -oE "$BASE\.[0-9]+" "$CONF" | cut -d. -f4 | sort -n | tail -1)"
 NEXT=$(( ${USED:-1} + 1 ))
 [[ $NEXT -lt 255 ]] || { echo "subnet is full" >&2; exit 1; }
 ADDR="$BASE.$NEXT"
+
+# The IPv6 half is optional: only if the server interface has a prefix.
+PREFIX6="$(grep -oE '\bfd[0-9a-f:]*::' <<<"$ADDR_LINE" | head -1)"
+if [[ -n "$PREFIX6" ]]; then
+  ADDR6="${PREFIX6}$(printf '%x' "$NEXT")"
+  CLIENT_ADDRS="$ADDR/24, $ADDR6/64"
+  PEER_IPS="$ADDR/32, $ADDR6/128"
+  ALLOWED="0.0.0.0/0, ::/0"
+else
+  CLIENT_ADDRS="$ADDR/24"
+  PEER_IPS="$ADDR/32"
+  ALLOWED="0.0.0.0/0"
+fi
 
 cat >> "$CONF" <<EOF
 
@@ -38,17 +53,17 @@ cat >> "$CONF" <<EOF
 [Peer]
 PublicKey = $PUB
 PresharedKey = $PSK
-AllowedIPs = $ADDR/32
+AllowedIPs = $PEER_IPS
 EOF
 
-wg addconf wg0 <(printf '[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = %s/32\n' \
-  "$PUB" "$PSK" "$ADDR/32") 2>/dev/null || systemctl restart wg-quick@wg0
+wg addconf wg0 <(printf '[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = %s\n' \
+  "$PUB" "$PSK" "$PEER_IPS") 2>/dev/null || systemctl restart wg-quick@wg0
 
 CLIENT="$OUT_DIR/$NAME.conf"
 cat > "$CLIENT" <<EOF
 [Interface]
 PrivateKey = $KEY
-Address = $ADDR/24
+Address = $CLIENT_ADDRS
 DNS = $DNS
 MTU = $MTU
 
@@ -57,7 +72,7 @@ PublicKey = $(cat /etc/wireguard/server.pub)
 PresharedKey = $PSK
 # Not the real server: this is the local WSS bridge on this device.
 Endpoint = $LOCAL_UDP
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = $ALLOWED
 PersistentKeepalive = 25
 EOF
 

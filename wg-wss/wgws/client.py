@@ -56,7 +56,7 @@ class Session:
                     continue
                 backoff = self.cfg.backoff_min
                 self.connected = True
-                log.info("tunnel up for %s:%s", *self.addr[:2])
+                log.info("tunnel up for %s", format_peer(self.addr))
                 try:
                     await self._pump(conn)
                 except (ws.WSClosed, ws.WSError, ConnectionError, OSError) as exc:
@@ -73,7 +73,7 @@ class Session:
         cfg = self.cfg
         ctx = build_ssl_context(cfg)
         reader, writer = await asyncio.open_connection(
-            cfg.host, cfg.port, ssl=ctx,
+            cfg.host, cfg.port, ssl=ctx, family=cfg.family,
             server_hostname=(cfg.sni or cfg.host) if ctx else None,
         )
         sock = writer.get_extra_info("socket")
@@ -87,9 +87,7 @@ class Session:
         headers = {}
         if cfg.token:
             headers["Authorization"] = "Bearer %s" % cfg.token
-        host_header = cfg.host_header or (
-            cfg.host if cfg.port in (443, 80) else "%s:%d" % (cfg.host, cfg.port)
-        )
+        host_header = cfg.host_header or format_host_header(cfg.host, cfg.port)
         return await ws.client_handshake(reader, writer, host_header, cfg.path, headers)
 
     async def _pump(self, conn):
@@ -139,7 +137,7 @@ class LocalUDP(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         session = self.sessions.get(addr)
         if session is None:
-            log.info("new local peer %s:%s", *addr[:2])
+            log.info("new local peer %s", format_peer(addr))
             session = Session(addr, self.cfg, self.transport, self._drop)
             self.sessions[addr] = session
         session.feed(data)
@@ -154,8 +152,20 @@ class LocalUDP(asyncio.DatagramProtocol):
             now = time.monotonic()
             for addr, session in list(self.sessions.items()):
                 if now - session.last_seen > self.cfg.idle_timeout:
-                    log.info("idle session %s:%s closed", *addr[:2])
+                    log.info("idle session %s closed", format_peer(addr))
                     session.close()
+
+
+def format_peer(addr):
+    """Readable form of a UDP peer address, IPv4 or IPv6."""
+    host, port = addr[0], addr[1]
+    return "[%s]:%d" % (host, port) if ":" in host else "%s:%d" % (host, port)
+
+
+def format_host_header(host, port):
+    """Host header value, with IPv6 literals in brackets as RFC 3986 requires."""
+    literal = "[%s]" % host if ":" in host else host
+    return literal if port in (80, 443) else "%s:%d" % (literal, port)
 
 
 def build_ssl_context(cfg):
@@ -176,15 +186,14 @@ async def run(cfg):
     transport, proto = await loop.create_datagram_endpoint(
         lambda: LocalUDP(cfg), local_addr=(cfg.listen_host, cfg.listen_port)
     )
+    local = format_peer((cfg.listen_host, cfg.listen_port))
     log.info(
-        "listening on udp %s:%d -> wss://%s:%d%s%s",
-        cfg.listen_host, cfg.listen_port, cfg.host, cfg.port, cfg.path,
+        "listening on udp %s -> %s://%s%s%s",
+        local, "ws" if cfg.no_tls else "wss",
+        format_host_header(cfg.host, cfg.port), cfg.path,
         " (TLS verification disabled)" if cfg.insecure else "",
     )
-    log.info(
-        "point your WireGuard client at  Endpoint = %s:%d",
-        cfg.listen_host, cfg.listen_port,
-    )
+    log.info("point your WireGuard client at  Endpoint = %s", local)
     reaper = asyncio.create_task(proto.reap())
     try:
         await asyncio.Future()

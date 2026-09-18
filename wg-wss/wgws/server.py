@@ -130,7 +130,7 @@ class Server:
         transport, _ = await loop.create_datagram_endpoint(
             lambda: _UDPRelay(queue),
             remote_addr=(self.cfg.wg_host, self.cfg.wg_port),
-            family=socket.AF_INET,
+            family=self.cfg.family,
         )
         try:
             up = asyncio.create_task(self._upstream(conn, transport))
@@ -183,18 +183,55 @@ def build_ssl_context(cfg):
     return ctx
 
 
+def open_listen_socket(host, port, v6only):
+    """Bind one listening socket, keeping IPv4 and IPv6 sockets independent."""
+    infos = socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE
+    )
+    family, socktype, proto, _, sockaddr = infos[0]
+    sock = socket.socket(family, socktype, proto)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if family == socket.AF_INET6:
+        # With both families bound explicitly the v6 socket must not also
+        # claim IPv4, or the second bind fails with EADDRINUSE.
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1 if v6only else 0)
+    sock.bind(sockaddr)
+    sock.setblocking(False)
+    return sock
+
+
 async def run(cfg):
     server = Server(cfg)
     ssl_ctx = build_ssl_context(cfg)
-    srv = await asyncio.start_server(
-        server.handle, cfg.listen_host, cfg.listen_port, ssl=ssl_ctx,
-        reuse_address=True, backlog=256,
+    wants_v4 = any(
+        socket.getaddrinfo(h, None, flags=socket.AI_PASSIVE)[0][0] == socket.AF_INET
+        for h in cfg.listen_hosts
     )
-    where = ", ".join(str(s.getsockname()) for s in srv.sockets)
+
+    servers, bound, failures = [], [], []
+    for host in cfg.listen_hosts:
+        try:
+            sock = open_listen_socket(host, cfg.listen_port, v6only=wants_v4)
+            srv = await asyncio.start_server(server.handle, sock=sock, ssl=ssl_ctx,
+                                             backlog=256)
+        except OSError as exc:
+            failures.append("%s: %s" % (host, exc))
+            continue
+        servers.append(srv)
+        bound.extend(str(s.getsockname()[:2]) for s in srv.sockets)
+
+    for failure in failures:
+        log.warning("could not listen on %s", failure)
+    if not servers:
+        raise SystemExit("error: could not listen on any address")
+
     log.info(
         "listening on %s (%s) -> wireguard %s:%d, path %s, auth %s",
-        where, "plain HTTP behind a proxy" if cfg.no_tls else "TLS",
+        ", ".join(bound), "plain HTTP behind a proxy" if cfg.no_tls else "TLS",
         cfg.wg_host, cfg.wg_port, cfg.path, "on" if cfg.token else "off",
     )
-    async with srv:
-        await srv.serve_forever()
+    try:
+        await asyncio.gather(*(srv.serve_forever() for srv in servers))
+    finally:
+        for srv in servers:
+            srv.close()

@@ -3,3 +3,4 @@ __pycache__/
 certs/
 *.pem
 tests/wg_e2e/wg_e2e
+dist/

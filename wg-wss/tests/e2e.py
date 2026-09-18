@@ -21,13 +21,41 @@ TOKEN = "e2e-secret-token"
 PATH = "/tunnel-e2e"
 
 
+GO_BINARY = ""
+
+
 def log(msg):
     print("[e2e] %s" % msg, flush=True)
 
 
+def host_has_ipv6():
+    if not socket.has_ipv6:
+        return False
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+        return True
+    except OSError:
+        return False
+
+
+SKIP_EXIT = 77  # the automake convention, so runners can tell skip from pass
+
+IPV6 = os.environ.get("WGWS_E2E_IPV6") == "1"
+if IPV6 and not host_has_ipv6():
+    print("[e2e] SKIP: this host has no IPv6 stack", flush=True)
+    raise SystemExit(SKIP_EXIT)
+LOOPBACK = "::1" if IPV6 else "127.0.0.1"
+
+
+def hostport(host, port):
+    return "[%s]:%d" % (host, port) if ":" in host else "%s:%d" % (host, port)
+
+
 def free_port(kind=socket.SOCK_STREAM):
-    with socket.socket(socket.AF_INET, kind) as sock:
-        sock.bind(("127.0.0.1", 0))
+    family = socket.AF_INET6 if IPV6 else socket.AF_INET
+    with socket.socket(family, kind) as sock:
+        sock.bind((LOOPBACK, 0))
         return sock.getsockname()[1]
 
 
@@ -50,8 +78,9 @@ class FakeWireGuard(threading.Thread):
 
     def __init__(self, port):
         super().__init__()
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("127.0.0.1", port))
+        family = socket.AF_INET6 if IPV6 else socket.AF_INET
+        self.sock = socket.socket(family, socket.SOCK_DGRAM)
+        self.sock.bind((LOOPBACK, port))
         self.running = True
         self.seen = 0
 
@@ -73,16 +102,50 @@ def wait_for_tcp(port, timeout=15):
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", port), 0.5):
+            with socket.create_connection((LOOPBACK, port), 0.5):
                 return True
         except OSError:
             time.sleep(0.1)
     return False
 
 
+GO_CLIENT = os.environ.get("WGWS_E2E_GO_CLIENT") == "1"
+
+
+def build_go_client():
+    """Compile the Go client once and return the path to the binary."""
+    out = os.path.join(tempfile.gettempdir(), "wgws-client-e2e")
+    subprocess.run(["go", "build", "-o", out, "."],
+                   cwd=os.path.join(ROOT, "client-go"), check=True)
+    return out
+
+
+def to_go_args(args):
+    """Translate the Python client's argv into the Go client's flags."""
+    url = args[1]
+    out = []
+    i = 2
+    while i < len(args):
+        item = args[i]
+        if item in ("--insecure", "-v"):
+            out.append(item)
+            i += 1
+            continue
+        value = args[i + 1]
+        if item in ("--ping-interval", "--idle-timeout", "--connect-timeout"):
+            value += "s"  # Go wants a duration
+        out += [item, value]
+        i += 2
+    return out + [url]
+
+
 def spawn(args, name):
+    if GO_CLIENT and args[0] == "client":
+        cmd = [GO_BINARY] + to_go_args(args)
+    else:
+        cmd = [PY, "-m", "wgws"] + args
     proc = subprocess.Popen(
-        [PY, "-m", "wgws"] + args, cwd=ROOT,
+        cmd, cwd=ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
 
@@ -97,13 +160,13 @@ def spawn(args, name):
 def roundtrip(sock, port, payload, timeout=6):
     sock.settimeout(timeout)
     deadline = time.time() + timeout
-    sock.sendto(payload, ("127.0.0.1", port))
+    sock.sendto(payload, (LOOPBACK, port))
     while time.time() < deadline:
         try:
             data, _ = sock.recvfrom(65535)
         except socket.timeout:
             # WireGuard retransmits too; so do we.
-            sock.sendto(payload, ("127.0.0.1", port))
+            sock.sendto(payload, (LOOPBACK, port))
             continue
         if data == b"ECHO:" + payload:
             return True
@@ -114,7 +177,7 @@ def https_get(port, path, token=None):
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    with socket.create_connection(("127.0.0.1", port), 5) as raw:
+    with socket.create_connection((LOOPBACK, port), 5) as raw:
         with ctx.wrap_socket(raw, server_hostname="localhost") as tls:
             req = "GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" % path
             if token:
@@ -136,6 +199,10 @@ def https_get(port, path, token=None):
 
 def main():
     failures = []
+    global GO_BINARY
+    if GO_CLIENT:
+        log("building the Go client")
+        GO_BINARY = build_go_client()
     tmp = tempfile.mkdtemp(prefix="wgws-e2e-")
     cert, key = make_cert(tmp)
     wg_port = free_port(socket.SOCK_DGRAM)
@@ -144,22 +211,24 @@ def main():
 
     wg = FakeWireGuard(wg_port)
     wg.start()
-    log("fake wireguard on udp/%d, wss on %d, local udp on %d"
-        % (wg_port, wss_port, local_port))
+    log("%s client, %s: fake wireguard on udp/%d, wss on %d, local udp on %d"
+        % ("Go" if GO_CLIENT else "Python", "IPv6" if IPV6 else "IPv4",
+           wg_port, wss_port, local_port))
 
     server = spawn(
-        ["server", "--listen", "127.0.0.1:%d" % wss_port,
-         "--wg", "127.0.0.1:%d" % wg_port, "--cert", cert, "--key", key,
+        ["server", "--listen", hostport(LOOPBACK, wss_port),
+         "--wg", hostport(LOOPBACK, wg_port), "--cert", cert, "--key", key,
          "--path", PATH, "--token", TOKEN, "--ping-interval", "2", "-v"],
         "server",
     )
     client = spawn(
-        ["client", "wss://127.0.0.1:%d%s" % (wss_port, PATH),
-         "--listen", "127.0.0.1:%d" % local_port, "--insecure",
+        ["client", "wss://%s%s" % (hostport(LOOPBACK, wss_port), PATH),
+         "--listen", hostport(LOOPBACK, local_port), "--insecure",
          "--token", TOKEN, "--ping-interval", "2", "-v"],
         "client",
     )
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = socket.socket(
+        socket.AF_INET6 if IPV6 else socket.AF_INET, socket.SOCK_DGRAM)
     try:
         if not wait_for_tcp(wss_port):
             raise SystemExit("server never came up")
@@ -209,8 +278,8 @@ def main():
         server.wait(10)
         time.sleep(1.0)
         server = spawn(
-            ["server", "--listen", "127.0.0.1:%d" % wss_port,
-             "--wg", "127.0.0.1:%d" % wg_port, "--cert", cert, "--key", key,
+            ["server", "--listen", hostport(LOOPBACK, wss_port),
+             "--wg", hostport(LOOPBACK, wg_port), "--cert", cert, "--key", key,
              "--path", PATH, "--token", TOKEN, "-v"],
             "server2",
         )
@@ -220,6 +289,22 @@ def main():
             log("PASS  tunnel recovered after server restart")
         else:
             failures.append("reconnect after restart")
+
+        # 7. dual-stack listen degrades gracefully on a single-stack host
+        dual_port = free_port()
+        dual = spawn(
+            ["server", "--listen", "127.0.0.1:%d,[::1]:%d" % (dual_port, dual_port),
+             "--wg", hostport(LOOPBACK, wg_port), "--cert", cert, "--key", key,
+             "--path", PATH, "--token", TOKEN],
+            "dual",
+        )
+        if wait_for_tcp(dual_port):
+            log("PASS  dual-stack listen serves %s even when one family is missing"
+                % ("IPv6" if IPV6 else "IPv4"))
+        else:
+            failures.append("dual-stack listen")
+        dual.terminate()
+        dual.wait(10)
 
         log("fake wireguard saw %d datagrams" % wg.seen)
     finally:

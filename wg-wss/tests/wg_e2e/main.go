@@ -131,10 +131,26 @@ func main() {
 	must(srv.Start())
 	defer srv.Process.Kill()
 
-	cli := exec.Command("python3", "-m", "wgws", "client",
-		fmt.Sprintf("wss://127.0.0.1:%d%s", wssPort, tunnelURI),
-		"--listen", fmt.Sprintf("127.0.0.1:%d", localUDP),
-		"--insecure", "--token", token)
+	// WGWS_GO_CLIENT=1 runs the same test against the single-binary Go client.
+	var cli *exec.Cmd
+	if os.Getenv("WGWS_GO_CLIENT") == "1" {
+		bin := filepath.Join(tmp, "wgws-client")
+		build := exec.Command("go", "build", "-o", bin, ".")
+		build.Dir = filepath.Join(root, "client-go")
+		build.Stdout, build.Stderr = os.Stdout, os.Stderr
+		must(build.Run())
+		step("using the Go client binary")
+		cli = exec.Command(bin,
+			"--listen", fmt.Sprintf("127.0.0.1:%d", localUDP),
+			"--insecure", "--token", token,
+			fmt.Sprintf("wss://127.0.0.1:%d%s", wssPort, tunnelURI))
+	} else {
+		step("using the Python client")
+		cli = exec.Command("python3", "-m", "wgws", "client",
+			fmt.Sprintf("wss://127.0.0.1:%d%s", wssPort, tunnelURI),
+			"--listen", fmt.Sprintf("127.0.0.1:%d", localUDP),
+			"--insecure", "--token", token)
+	}
 	cli.Dir, cli.Stdout, cli.Stderr = root, os.Stdout, os.Stderr
 	must(cli.Start())
 	defer cli.Process.Kill()

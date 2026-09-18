@@ -118,5 +118,74 @@ class HandshakeParsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ws.is_websocket_upgrade(headers))
 
 
+class AddressParsingTest(unittest.TestCase):
+    """IPv6 literals need brackets in URLs and Host headers, not in sockets."""
+
+    def test_split_hostport(self):
+        from wgws.__main__ import _split_hostport
+
+        self.assertEqual(_split_hostport("0.0.0.0:443", 443), ("0.0.0.0", 443))
+        self.assertEqual(_split_hostport("127.0.0.1", 51820), ("127.0.0.1", 51820))
+        self.assertEqual(_split_hostport("[::]:443", 443), ("::", 443))
+        self.assertEqual(_split_hostport("[2001:db8::1]:8443", 443),
+                         ("2001:db8::1", 8443))
+        self.assertEqual(_split_hostport("[::1]", 51820), ("::1", 51820))
+
+    def test_host_header_brackets_ipv6_only(self):
+        from wgws.client import format_host_header
+
+        self.assertEqual(format_host_header("vpn.example.com", 443), "vpn.example.com")
+        self.assertEqual(format_host_header("vpn.example.com", 8443),
+                         "vpn.example.com:8443")
+        self.assertEqual(format_host_header("2001:db8::1", 443), "[2001:db8::1]")
+        self.assertEqual(format_host_header("2001:db8::1", 8443), "[2001:db8::1]:8443")
+
+    def test_peer_formatting(self):
+        from wgws.client import format_peer
+
+        self.assertEqual(format_peer(("127.0.0.1", 51820)), "127.0.0.1:51820")
+        # IPv6 peers arrive as 4-tuples with flowinfo and scope id.
+        self.assertEqual(format_peer(("::1", 51820, 0, 0)), "[::1]:51820")
+
+    def test_client_url_parsing(self):
+        from wgws.__main__ import build_parser, prepare_client
+        import socket as s
+
+        args = prepare_client(build_parser().parse_args(
+            ["client", "wss://[2001:db8::1]:8443/secret"]))
+        self.assertEqual((args.host, args.port, args.path),
+                         ("2001:db8::1", 8443, "/secret"))
+        self.assertFalse(args.no_tls)
+        self.assertEqual(args.family, 0)
+
+        args = prepare_client(build_parser().parse_args(
+            ["client", "ws://vpn.example.com/ws", "--family", "6"]))
+        self.assertTrue(args.no_tls)
+        self.assertEqual((args.port, args.family), (80, s.AF_INET6))
+
+    def test_server_listen_list_and_family_filter(self):
+        from wgws.__main__ import build_parser, prepare_server
+        import socket as s
+
+        base = ["server", "--no-tls", "--listen"]
+        args = prepare_server(build_parser().parse_args(
+            base + ["0.0.0.0:443,[::]:443"]))
+        self.assertEqual(args.listen_hosts, ["0.0.0.0", "::"])
+        self.assertEqual(args.listen_port, 443)
+
+        args = prepare_server(build_parser().parse_args(
+            base + ["0.0.0.0:443,[::]:443", "--family", "6"]))
+        self.assertEqual(args.listen_hosts, ["::"])
+
+        args = prepare_server(build_parser().parse_args(
+            base + ["0.0.0.0:443,[::]:443", "--family", "4"]))
+        self.assertEqual(args.listen_hosts, ["0.0.0.0"])
+        self.assertEqual(args.family, s.AF_INET)
+
+        with self.assertRaises(SystemExit):
+            prepare_server(build_parser().parse_args(
+                base + ["0.0.0.0:443,[::]:8443"]))  # mismatched ports
+
+
 if __name__ == "__main__":
     unittest.main()
