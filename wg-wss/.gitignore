@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+certs/
+*.pem
+tests/wg_e2e/wg_e2e
+dist/

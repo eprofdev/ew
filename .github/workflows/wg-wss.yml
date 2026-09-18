@@ -1,0 +1,137 @@
+name: wg-wss
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["wg-wss/**", ".github/workflows/wg-wss.yml"]
+  pull_request:
+    paths: ["wg-wss/**", ".github/workflows/wg-wss.yml"]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: wg-wss
+
+jobs:
+  unit:
+    name: unit tests (python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The README promises 3.8+, so the oldest supported version is tested
+          # too. 3.8 has no build for ubuntu-24.04, hence the older runner.
+          - { python: "3.8", os: ubuntu-22.04 }
+          - { python: "3.9", os: ubuntu-latest }
+          - { python: "3.11", os: ubuntu-latest }
+          - { python: "3.12", os: ubuntu-latest }
+          - { python: "3.13", os: ubuntu-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: unit tests
+        run: python -m unittest discover -s tests -v
+
+  tunnel:
+    name: tunnel e2e (${{ matrix.client }} client, ${{ matrix.family }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [python, go]
+        family: [ipv4, ipv6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-go@v5
+        if: matrix.client == 'go'
+        with:
+          go-version: stable
+          # The Go client has no dependencies, so there is nothing to cache.
+          cache: false
+      - name: report IPv6 availability
+        run: |
+          python - <<'PY'
+          import socket
+          try:
+              with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+                  s.bind(("::1", 0))
+              print("IPv6 loopback available - the IPv6 run will execute")
+          except OSError as exc:
+              print("no IPv6 loopback (%s) - the IPv6 run will skip itself" % exc)
+          PY
+      - name: end-to-end tunnel
+        env:
+          WGWS_E2E_GO_CLIENT: ${{ matrix.client == 'go' && '1' || '0' }}
+          WGWS_E2E_IPV6: ${{ matrix.family == 'ipv6' && '1' || '0' }}
+        run: |
+          set +e
+          python -u tests/e2e.py
+          status=$?
+          # 77 is the skip convention used by tests/e2e.py.
+          if [ $status -eq 77 ]; then
+            echo "::warning::IPv6 unavailable on this runner - test skipped"
+            exit 0
+          fi
+          exit $status
+
+  wireguard:
+    name: real wireguard session (${{ matrix.client }} client)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [python, go]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: wg-wss/tests/wg_e2e/go.sum
+      - name: install wireguard-tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq wireguard-tools
+      - name: real WireGuard handshake through the tunnel
+        env:
+          WGWS_GO_CLIENT: ${{ matrix.client == 'go' && '1' || '0' }}
+        working-directory: wg-wss/tests/wg_e2e
+        run: go run .
+
+  lint:
+    name: lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: shell syntax
+        run: bash -n scripts/*.sh
+      - name: shellcheck
+        run: shellcheck --severity=warning scripts/*.sh
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l client-go tests/wg_e2e)"
+          if [ -n "$unformatted" ]; then
+            echo "needs gofmt: $unformatted"
+            exit 1
+          fi
+      - name: go vet and build the client
+        working-directory: wg-wss/client-go
+        run: |
+          go vet ./...
+          go build -o /dev/null .
+      - name: cross-compile every target
+        run: ./scripts/build-client.sh
