@@ -3,7 +3,7 @@
 # module needed. The Go parts are skipped when Go is not installed; the
 # IPv6 run skips itself on a host without an IPv6 stack.
 set -uo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 rc=0
 declare -a RESULTS
 

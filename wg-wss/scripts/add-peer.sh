@@ -34,10 +34,16 @@ NEXT=$(( ${USED:-1} + 1 ))
 [[ $NEXT -lt 255 ]] || { echo "subnet is full" >&2; exit 1; }
 ADDR="$BASE.$NEXT"
 
-# The IPv6 half is optional: only if the server interface has a prefix.
-PREFIX6="$(grep -oE '\bfd[0-9a-f:]*::' <<<"$ADDR_LINE" | head -1)"
-if [[ -n "$PREFIX6" ]]; then
-  ADDR6="${PREFIX6}$(printf '%x' "$NEXT")"
+# The IPv6 half is optional: only if the server interface has a prefix. Any
+# notation works - ipaddress does the arithmetic, not a regular expression.
+IFACE6="$(tr ',' '\n' <<<"$ADDR_LINE" | grep -oE '[0-9a-fA-F:]+:[0-9a-fA-F:]*/[0-9]+' | head -1)"
+if [[ -n "$IFACE6" ]]; then
+  ADDR6="$(python3 - "$IFACE6" "$NEXT" <<'PY'
+import ipaddress, sys
+network = ipaddress.ip_interface(sys.argv[1]).network
+print(network.network_address + int(sys.argv[2]))
+PY
+)"
   CLIENT_ADDRS="$ADDR/24, $ADDR6/64"
   PEER_IPS="$ADDR/32, $ADDR6/128"
   ALLOWED="0.0.0.0/0, ::/0"

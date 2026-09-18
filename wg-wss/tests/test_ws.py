@@ -187,5 +187,48 @@ class AddressParsingTest(unittest.TestCase):
                 base + ["0.0.0.0:443,[::]:8443"]))  # mismatched ports
 
 
+class FamilyHandlingTest(unittest.TestCase):
+    """Regressions from the IPv6 review: each of these used to misbehave."""
+
+    def test_unbracketed_ipv6_literal_has_no_port(self):
+        from wgws.__main__ import _split_hostport
+
+        self.assertEqual(_split_hostport("::", 443), ("::", 443))
+        self.assertEqual(_split_hostport("2001:db8::1", 443), ("2001:db8::1", 443))
+
+    def test_invalid_port_exits_cleanly(self):
+        from wgws.__main__ import _split_hostport
+
+        with self.assertRaises(SystemExit):
+            _split_hostport("example.com:not-a-port", 443)
+
+    def test_v6only_set_when_ipv4_is_bound_separately(self):
+        import socket as s
+        from wgws.server import needs_v6only
+
+        self.assertTrue(needs_v6only(0, ["0.0.0.0", "::"]))
+        # --family 6 means IPv6 alone, so IPv4-mapped clients must be refused.
+        self.assertTrue(needs_v6only(s.AF_INET6, ["::"]))
+        # "::" on its own is the dual-stack case and must accept both.
+        self.assertFalse(needs_v6only(0, ["::"]))
+
+    def test_unresolvable_listen_host_does_not_raise(self):
+        from wgws.server import _family_of
+
+        self.assertIsNone(_family_of("no-such-host.invalid"))
+
+    def test_family_filter_resolves_names_instead_of_guessing(self):
+        import socket as s
+        from wgws.__main__ import _usable_in_family
+
+        self.assertTrue(_usable_in_family("0.0.0.0", s.AF_INET))
+        self.assertFalse(_usable_in_family("0.0.0.0", s.AF_INET6))
+        self.assertTrue(_usable_in_family("::", s.AF_INET6))
+        self.assertFalse(_usable_in_family("::", s.AF_INET))
+        # A name is decided by resolution, never by looking for a colon.
+        self.assertTrue(_usable_in_family("localhost", s.AF_INET))
+        self.assertTrue(_usable_in_family("anything", 0))
+
+
 if __name__ == "__main__":
     unittest.main()

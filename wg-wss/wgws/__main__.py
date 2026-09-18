@@ -75,13 +75,35 @@ def build_parser():
 FAMILIES = {"auto": 0, "4": socket.AF_INET, "6": socket.AF_INET6}
 
 
+def _usable_in_family(host, family):
+    """Whether a listen address can be bound in the requested family.
+
+    Resolution decides it, so a DNS name with only AAAA records is kept under
+    --family 6 and a literal of the wrong family is dropped.
+    """
+    if family == 0:
+        return True
+    try:
+        socket.getaddrinfo(host, None, family=family, flags=socket.AI_PASSIVE)
+        return True
+    except OSError:
+        return False
+
+
 def _split_hostport(value, default_port):
     if value.startswith("["):  # [::1]:443
         host, _, rest = value[1:].partition("]")
         port = int(rest.lstrip(":")) if rest.lstrip(":") else default_port
         return host, port
+    if value.count(":") > 1:
+        # An unbracketed IPv6 literal such as "::" or "2001:db8::1" carries no
+        # port; only the bracketed form can.
+        return value, default_port
     host, _, port = value.partition(":")
-    return host, int(port) if port else default_port
+    try:
+        return host, int(port) if port else default_port
+    except ValueError:
+        raise SystemExit("error: %r is not a valid address" % value)
 
 
 def prepare_server(args):
@@ -93,9 +115,7 @@ def prepare_server(args):
         if not item:
             continue
         host, port = _split_hostport(item, 443)
-        if args.family == socket.AF_INET and ":" in host:
-            continue
-        if args.family == socket.AF_INET6 and ":" not in host and host != "":
+        if not _usable_in_family(host, args.family):
             continue
         args.listen_hosts.append(host)
         ports.add(port)

@@ -25,6 +25,9 @@ import (
 
 var version = "1.0.0"
 
+// A connection that lasted at least this long is treated as having worked.
+const stableAfter = 30 * time.Second
+
 type config struct {
 	url          string
 	host         string
@@ -60,7 +63,7 @@ func main() {
 	flag.StringVar(&cfg.listen, "listen", envOr("CLIENT_LISTEN", "127.0.0.1:51820"),
 		"local UDP address WireGuard sends to")
 	flag.StringVar(&cfg.token, "token", envOr("TOKEN", ""), "shared secret")
-	flag.StringVar(&cfg.path, "path", envOr("PATH_", "/ws"),
+	flag.StringVar(&cfg.path, "path", envOr("PATH", "/ws"),
 		"secret WebSocket path (overridden by the path in the url)")
 	flag.StringVar(&cfg.ca, "ca", envOr("CA", ""), "CA bundle for the server certificate")
 	flag.BoolVar(&cfg.insecure, "insecure", false,
@@ -91,6 +94,12 @@ func main() {
 	}
 	if flag.NArg() != 1 {
 		flag.Usage()
+		os.Exit(2)
+	}
+	switch cfg.family {
+	case "auto", "4", "6":
+	default:
+		fmt.Fprintf(os.Stderr, "error: -family must be auto, 4 or 6\n")
 		os.Exit(2)
 	}
 	if err := parseURL(cfg, flag.Arg(0)); err != nil {
@@ -129,8 +138,8 @@ func parseURL(cfg *config, raw string) error {
 			return err
 		}
 	}
-	if parsed.Path != "" && parsed.Path != "/" {
-		cfg.path = parsed.Path
+	if escaped := parsed.EscapedPath(); escaped != "" && escaped != "/" {
+		cfg.path = escaped
 	}
 	if parsed.RawQuery != "" {
 		cfg.path += "?" + parsed.RawQuery
@@ -234,11 +243,26 @@ func (s *session) run() {
 			}
 			continue
 		}
-		backoff = s.cfg.backoffMin
 		log.Printf("tunnel up for %s", s.addr)
+		started := time.Now()
 		s.pump(conn)
 		conn.Close()
 		log.Printf("tunnel down, reconnecting")
+		// A tunnel that stayed up is healthy, so the next dial starts from the
+		// shortest delay. One that died on arrival backs off like a refused
+		// connection, or a server that accepts and drops spins the handshake.
+		if time.Since(started) >= stableAfter {
+			backoff = s.cfg.backoffMin
+			continue
+		}
+		select {
+		case <-time.After(backoff):
+		case <-s.done:
+			return
+		}
+		if backoff *= 2; backoff > s.cfg.backoffMax {
+			backoff = s.cfg.backoffMax
+		}
 	}
 }
 
@@ -353,11 +377,13 @@ func (a *atomic64) set(v int64) { a.mu.Lock(); a.v = v; a.mu.Unlock() }
 func (a *atomic64) get() int64  { a.mu.Lock(); defer a.mu.Unlock(); return a.v }
 
 func run(cfg *config) error {
-	addr, err := net.ResolveUDPAddr("udp"+cfg.network(), cfg.listen)
+	// The local listener follows the address given to -listen; -family only
+	// governs how this client reaches the server.
+	addr, err := net.ResolveUDPAddr("udp", cfg.listen)
 	if err != nil {
 		return err
 	}
-	local, err := net.ListenUDP("udp"+cfg.network(), addr)
+	local, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return err
 	}

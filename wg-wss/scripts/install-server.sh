@@ -45,6 +45,13 @@ wg pubkey < /etc/wireguard/server.key > /etc/wireguard/server.pub
 WAN_IF="$(ip route show default | awk '/default/ {print $5; exit}')"
 echo "==> outbound interface: $WAN_IF"
 
+# Not every kernel or container has ip6tables NAT. Check before committing to
+# IPv6, so a missing feature downgrades the tunnel instead of failing install.
+if [[ -n "$WG_NET6" ]] && ! ip6tables -t nat -L -n >/dev/null 2>&1; then
+  echo "    ip6tables NAT unavailable on this host -> building an IPv4-only tunnel"
+  WG_NET6=""
+fi
+
 ADDRESSES="$WG_NET"
 [[ -n "$WG_NET6" ]] && ADDRESSES="$WG_NET, $WG_NET6"
 
@@ -59,18 +66,18 @@ PostUp   = iptables -I INPUT -p udp --dport $WG_PORT ! -i lo -j DROP
 PostUp   = iptables -t nat -A POSTROUTING -o $WAN_IF -j MASQUERADE
 PostUp   = iptables -I FORWARD -i wg0 -j ACCEPT
 PostUp   = iptables -I FORWARD -o wg0 -j ACCEPT
-${WG_NET6:+PostUp   = ip6tables -I INPUT -p udp --dport $WG_PORT ! -i lo -j DROP}
-${WG_NET6:+PostUp   = ip6tables -t nat -A POSTROUTING -o $WAN_IF -j MASQUERADE}
-${WG_NET6:+PostUp   = ip6tables -I FORWARD -i wg0 -j ACCEPT}
-${WG_NET6:+PostUp   = ip6tables -I FORWARD -o wg0 -j ACCEPT}
+${WG_NET6:+PostUp   = ip6tables -I INPUT -p udp --dport $WG_PORT ! -i lo -j DROP || true}
+${WG_NET6:+PostUp   = ip6tables -t nat -A POSTROUTING -o $WAN_IF -j MASQUERADE || true}
+${WG_NET6:+PostUp   = ip6tables -I FORWARD -i wg0 -j ACCEPT || true}
+${WG_NET6:+PostUp   = ip6tables -I FORWARD -o wg0 -j ACCEPT || true}
 PostDown = iptables -D INPUT -p udp --dport $WG_PORT ! -i lo -j DROP
 PostDown = iptables -t nat -D POSTROUTING -o $WAN_IF -j MASQUERADE
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT
 PostDown = iptables -D FORWARD -o wg0 -j ACCEPT
-${WG_NET6:+PostDown = ip6tables -D INPUT -p udp --dport $WG_PORT ! -i lo -j DROP}
-${WG_NET6:+PostDown = ip6tables -t nat -D POSTROUTING -o $WAN_IF -j MASQUERADE}
-${WG_NET6:+PostDown = ip6tables -D FORWARD -i wg0 -j ACCEPT}
-${WG_NET6:+PostDown = ip6tables -D FORWARD -o wg0 -j ACCEPT}
+${WG_NET6:+PostDown = ip6tables -D INPUT -p udp --dport $WG_PORT ! -i lo -j DROP || true}
+${WG_NET6:+PostDown = ip6tables -t nat -D POSTROUTING -o $WAN_IF -j MASQUERADE || true}
+${WG_NET6:+PostDown = ip6tables -D FORWARD -i wg0 -j ACCEPT || true}
+${WG_NET6:+PostDown = ip6tables -D FORWARD -o wg0 -j ACCEPT || true}
 EOF
   sed -i '/^$/{/./!d}' "$CONF"
   echo "==> wrote $CONF"

@@ -127,10 +127,11 @@ class Server:
     async def _pump(self, conn):
         loop = asyncio.get_running_loop()
         queue = asyncio.Queue(maxsize=self.cfg.queue_size)
+        # The family of this hop follows the WireGuard address itself: --family
+        # is about how clients reach us, not how we reach WireGuard next door.
         transport, _ = await loop.create_datagram_endpoint(
             lambda: _UDPRelay(queue),
             remote_addr=(self.cfg.wg_host, self.cfg.wg_port),
-            family=self.cfg.family,
         )
         try:
             up = asyncio.create_task(self._upstream(conn, transport))
@@ -183,6 +184,25 @@ def build_ssl_context(cfg):
     return ctx
 
 
+def _family_of(host):
+    """Family a listen address resolves to, or None when it does not resolve."""
+    try:
+        return socket.getaddrinfo(host, None, flags=socket.AI_PASSIVE)[0][0]
+    except OSError:
+        return None
+
+
+def needs_v6only(family, hosts):
+    """Whether an IPv6 listener must refuse IPv4-mapped connections.
+
+    True when IPv4 is bound separately (otherwise the second bind collides)
+    and when --family 6 asked for IPv6 alone.
+    """
+    if family == socket.AF_INET6:
+        return True
+    return any(_family_of(host) == socket.AF_INET for host in hosts)
+
+
 def open_listen_socket(host, port, v6only):
     """Bind one listening socket, keeping IPv4 and IPv6 sockets independent."""
     infos = socket.getaddrinfo(
@@ -203,18 +223,15 @@ def open_listen_socket(host, port, v6only):
 async def run(cfg):
     server = Server(cfg)
     ssl_ctx = build_ssl_context(cfg)
-    wants_v4 = any(
-        socket.getaddrinfo(h, None, flags=socket.AI_PASSIVE)[0][0] == socket.AF_INET
-        for h in cfg.listen_hosts
-    )
+    v6only = needs_v6only(cfg.family, cfg.listen_hosts)
 
     servers, bound, failures = [], [], []
     for host in cfg.listen_hosts:
         try:
-            sock = open_listen_socket(host, cfg.listen_port, v6only=wants_v4)
+            sock = open_listen_socket(host, cfg.listen_port, v6only=v6only)
             srv = await asyncio.start_server(server.handle, sock=sock, ssl=ssl_ctx,
                                              backlog=256)
-        except OSError as exc:
+        except (OSError, socket.gaierror) as exc:
             failures.append("%s: %s" % (host, exc))
             continue
         servers.append(srv)

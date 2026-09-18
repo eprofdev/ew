@@ -15,6 +15,9 @@ from . import ws
 
 log = logging.getLogger("wgws.client")
 
+# A connection that lasted at least this long is treated as having worked.
+STABLE_AFTER = 30.0
+
 
 class Session:
     """One local UDP peer (normally a single WireGuard instance)."""
@@ -54,8 +57,8 @@ class Session:
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, self.cfg.backoff_max)
                     continue
-                backoff = self.cfg.backoff_min
                 self.connected = True
+                started = time.monotonic()
                 log.info("tunnel up for %s", format_peer(self.addr))
                 try:
                     await self._pump(conn)
@@ -64,6 +67,15 @@ class Session:
                 finally:
                     self.connected = False
                     await conn.close()
+                # A tunnel that stayed up is healthy, so the next dial starts
+                # from the shortest delay. One that died on arrival must back
+                # off exactly like a refused connection, or a server that
+                # accepts and immediately drops turns into a TLS handshake spin.
+                if time.monotonic() - started >= STABLE_AFTER:
+                    backoff = self.cfg.backoff_min
+                else:
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, self.cfg.backoff_max)
         except asyncio.CancelledError:
             pass
         finally:
