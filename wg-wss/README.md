@@ -1,5 +1,7 @@
 # wg-wss — واير‑غارد عبر WebSocket المشفّر على المنفذ 443
 
+[![wg-wss](https://github.com/eprofdev/ew/actions/workflows/wg-wss.yml/badge.svg)](https://github.com/eprofdev/ew/actions/workflows/wg-wss.yml)
+
 نفق يُغلّف حزم **WireGuard** (التي هي UDP) داخل **WebSocket فوق TLS** على المنفذ
 **443**، فتبدو للشبكة كأنها زيارة عادية لموقع HTTPS. مفيد على الشبكات التي تحجب
 UDP أو تسمح بمنفذ 443 فقط (فنادق، شبكات شركات، مزوّدات تحجب بروتوكول WireGuard).
@@ -189,7 +191,19 @@ wireguard-go بمكدّس netstack) ويمرّر طلب HTTP داخل النفق
 وحركة IP تعملان فعليًا فوق WebSocket. يحتاج Go واتصالًا بالإنترنت لتنزيل المكتبة
 مرة واحدة، ولا يحتاج صلاحية root ولا وحدة نواة WireGuard.
 
-اختبارات IPv6 تتخطّى نفسها تلقائيًا على مضيف بلا مكدّس IPv6.
+اختبارات IPv6 تتخطّى نفسها تلقائيًا على مضيف بلا مكدّس IPv6 (رمز الخروج 77).
+تشغيل GitHub Actions يملك `::1`، فمسار IPv6 يُختبر هناك فعليًا في كل دفعة.
+
+### ما يفحصه CI
+
+كل دفعة وكل Pull Request تشغّل 12 مهمة:
+
+| المهمة | التغطية |
+|---|---|
+| `unit tests` | Python 3.8 و3.9 و3.11 و3.12 و3.13 |
+| `tunnel e2e` | النفق كاملًا: عميل Python وGo × IPv4 وIPv6 |
+| `real wireguard session` | مصافحة WireGuard حقيقية بكلا العميلين |
+| `lint and build` | shellcheck، gofmt، go vet، وبناء المنصّات التسع |
 
 ---
 
