@@ -123,12 +123,14 @@ class NaifSafeguards:
             )
 
         if not m.fundamentals_known:
-            vetoes.append(
-                Veto(
-                    "DATA_UNAVAILABLE",
-                    "الكاب أو الفلوت غير معروف — ممنوع التخمين في أسهم السنتات",
+            if cfg.require_fundamentals:
+                vetoes.append(
+                    Veto(
+                        "DATA_UNAVAILABLE",
+                        "الكاب أو الفلوت غير معروف — ممنوع التخمين في أسهم السنتات",
+                    )
                 )
-            )
+            # وضع بحثي: نتجاوز الفلتر الهيكلي عمداً لقياس السلوك السعري وحده
         elif not self.filter_micro_cap_structure(m):
             vetoes.append(
                 Veto(

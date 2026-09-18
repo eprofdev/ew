@@ -15,7 +15,7 @@
 
 ```bash
 python -m trading_bot.demo            # مثال كامل ببيانات تركيبية
-python -m unittest discover -s tests  # 105 اختبار وحدة (بلا شبكة)
+python -m unittest discover -s tests  # 128 اختبار وحدة (بلا شبكة)
 
 export TWELVE_DATA_API_KEY=xxxxxxxx   # فحص حي ببيانات Twelve Data
 python -m trading_bot.scan VSME --equity 10000
@@ -152,6 +152,61 @@ python -m trading_bot.backtest_cli AEMD --csv-4h data/AEMD_4h.csv --csv-1d data/
   قمع الفرص: no_setup 1011 | setup_no_reversal 40 | rsi_rejected 6 | confirmed 16
 ```
 
+## اختبار الكون الكامل (كل الأسهم)
+
+```bash
+# 1) اعرف التكلفة أولاً — لا تشغّل ما يستغرق أياماً وأنت تجهل ذلك
+python -m trading_bot.portfolio_cli --exchange NASDAQ --dry-run
+
+# 2) ابنِ قائمة الرموز (4,509 رمزاً في ناسداك، منها 3,683 سهماً عادياً)
+python -m trading_bot.portfolio_cli --exchange NASDAQ \
+    --build-universe data/universe_nasdaq.json --extra-symbols AMED VSME
+
+# 3) شغّل مع استئناف تلقائي — آمن للإيقاف والمتابعة في أي لحظة
+python -m trading_bot.portfolio_cli --universe data/universe_nasdaq.json \
+    --checkpoint data/run1.jsonl --rate-limit 8 --research-mode \
+    --fundamentals data/fundamentals.json --report data/report.json
+
+# 4) أعد التحليل من الذاكرة المؤقتة دون أي طلب شبكة
+python -m trading_bot.portfolio_cli --universe data/universe_nasdaq.json --offline
+```
+
+### التكلفة الحقيقية (أرقام مقاسة لا مقدَّرة)
+
+| الخطة | طلبات/دقيقة | زمن جلب 3,683 رمزاً |
+|---|---|---|
+| مجانية | 8 | **15.3 ساعة** (أو 9.2 يوم بحد 800 طلب يومياً) |
+| Grow | 55 | 2.2 ساعة |
+| Pro+ | 610 | 12 دقيقة |
+
+الحساب نفسه 0.3 ساعة فقط للكون كله — **العنق هو الـ API لا المعالج**،
+ولذلك الذاكرة المؤقتة ونقطة الاستئناف أهم من التوازي.
+
+### مستويان للحكم
+
+الخطأ الشائع جمع منحنيات رأس المال: لا يمكنك فتح 40 صفقة متزامنة بـ 1%
+مخاطرة لكل واحدة. لذلك يفصل المحرك:
+
+- **تجميع إحصائي**: كل الصفقات في سلة واحدة → التوقع بوحدات R ومجال ثقته.
+  هذا حكم على الاستراتيجية نفسها.
+- **محاكاة محفظة**: ترتيب زمني بسقف للصفقات المتزامنة → منحنى رأس مال
+  واقعي مع الصفقات التي فاتتك لامتلاء الفتحات. هذا حكم على قابلية التطبيق.
+
+### انحياز البقاء — أخطر ما في الأمر
+
+`/stocks` تعطي **المدرجين اليوم فقط**. الدليل من هذا المستودع: `AMED`
+(Amedisys) شُطبت بعد استحواذ UnitedHealth، فهي غائبة تماماً عن الكون.
+كل شركة أفلست أو شُطبت غائبة كذلك — وفي أسهم السنتات الشطب مصير شائع.
+
+النتيجة: أي رقم من هذا الاختبار هو **حد أعلى متفائل** لا توقع واقعي. خفّف
+الأثر بـ `--extra-symbols` لإضافة رموز مشطوبة تعرفها، واقرأ الباقي بحذر.
+
+### وضع البحث
+
+`--research-mode` يعطّل فلتر الهيكل المالي (الكاب والفلوت) لقياس السلوك
+السعري وحده على كون كبير دون خطة Pro. **يُعلَن في كل تقرير** لأنه يعطّل
+أهم صمامات نايف — النتيجة حينها لا تمثل البوت الحقيقي.
+
 ## اختيار الأسهم (Screener)
 
 قمع بثلاث طبقات في `screener.py`: استبعاد صلب (سعر، سيولة، فلوت، RVOL) ثم
@@ -207,6 +262,9 @@ trading_bot/
   backtest.py                        محرك walk-forward لقياس الأداء
   backtest_cli.py                    تشغيل الاختبار من سطر الأوامر
   screener.py                        اختيار الأسهم وترتيبها
+  universe.py                        بناء كون الرموز + تحذير انحياز البقاء
+  portfolio.py                       تشغيل الكون كله وتجميع النتائج
+  portfolio_cli.py                   سطر أوامر الكون الكامل
   dataquality.py                     حارس التجزئة وجودة السلاسل
   csvio.py                           حفظ/تحميل الشموع
   orderflow/book.py                  دفتر أسعار L2
@@ -221,4 +279,5 @@ tests/test_bot.py                    31 اختبار للمحرك والاستر
 tests/test_twelve_data.py            26 اختبار للمزود (بلا شبكة)
 tests/test_backtest.py               18 اختبار للـ backtest وجودة البيانات
 tests/test_screener_orderflow.py     30 اختبار للمرشّح وتدفق الأوامر
+tests/test_portfolio.py              23 اختبار للكون والمحفظة
 ```
