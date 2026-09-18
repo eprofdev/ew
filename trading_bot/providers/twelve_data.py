@@ -50,6 +50,12 @@ class TwelveDataError(RuntimeError):
 class RateLimitError(TwelveDataError):
     """تجاوز حد الطلبات (429) أو نفاد الرصيد."""
 
+    def __init__(self, message: str, retryable: bool = True) -> None:
+        super().__init__(message)
+        # حد الدقيقة يزول بالانتظار؛ أما نفاد الرصيد اليومي فالانتظار فيه
+        # إهدار للوقت — يجب أن يوقف التشغيل ويحفظ موضعه.
+        self.retryable = retryable
+
 
 class PlanLimitError(TwelveDataError):
     """النقطة غير متاحة في خطة الاشتراك الحالية."""
@@ -209,6 +215,8 @@ class TwelveDataProvider:
                     payload = json.loads(response.read().decode("utf-8"))
                 return self._check_payload(payload, path)
             except (RateLimitError, urllib.error.URLError, TimeoutError, OSError) as exc:
+                if isinstance(exc, RateLimitError) and not exc.retryable:
+                    raise   # نفاد الرصيد اليومي — لا فائدة من الانتظار
                 last_error = exc
                 if isinstance(exc, urllib.error.HTTPError) and exc.code not in (429, 500, 502, 503, 504):
                     raise TwelveDataError(f"{path}: HTTP {exc.code}") from exc
@@ -230,7 +238,7 @@ class TwelveDataProvider:
         if payload.get("status") == "error" or code >= 400:
             message = str(payload.get("message", "خطأ غير معروف"))
             if code == 429 or "run out of API credits" in message:
-                raise RateLimitError(message)
+                raise RateLimitError(message, retryable="current minute" in message)
             if code == 403 or "available exclusively with" in message:
                 raise PlanLimitError(message)
             if code == 404 or "not found" in message.lower():

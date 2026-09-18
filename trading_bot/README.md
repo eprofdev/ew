@@ -15,7 +15,7 @@
 
 ```bash
 python -m trading_bot.demo            # مثال كامل ببيانات تركيبية
-python -m unittest discover -s tests  # 148 اختبار وحدة (بلا شبكة)
+python -m unittest discover -s tests  # 170 اختبار وحدة (بلا شبكة)
 
 export TWELVE_DATA_API_KEY=xxxxxxxx   # فحص حي ببيانات Twelve Data
 python -m trading_bot.scan VSME --equity 10000
@@ -151,6 +151,51 @@ python -m trading_bot.backtest_cli AEMD --csv-4h data/AEMD_4h.csv --csv-1d data/
   ⛔ العينة 5 صفقة فقط — المطلوب لدقة ±0.25R نحو 139 صفقة
   قمع الفرص: no_setup 1011 | setup_no_reversal 40 | rsi_rejected 6 | confirmed 16
 ```
+
+## خط الإنتاج — أمر واحد يستأنف نفسه
+
+```bash
+export TWELVE_DATA_API_KEY=xxxx
+python -m trading_bot.pipeline_cli --data-dir data/run1 --research-mode
+```
+
+شغّله مرة. إن نفد رصيد اليوم توقف وحفظ موضعه — أعد نفس الأمر غداً فيكمل.
+وللتشغيل التلقائي:
+
+```bash
+0 2 * * *  cd /path/to/repo && python -m trading_bot.pipeline_cli --data-dir data/run1 --quiet
+```
+
+| المرحلة | التكلفة | تُحفظ في |
+|---|---|---|
+| 1. `universe` | رصيد واحد | `universe.json` |
+| 2. `prescreen0` | **صفر** | `stage0.json` |
+| 3. `prescreen1` | رصيد/رمز | `quotes.jsonl` → `candidates.json` |
+| 4. `backtest` | رصيدان/رمز | `backtest.jsonl` |
+| 5. `report` | صفر | `report.json` |
+
+```bash
+python -m trading_bot.pipeline_cli --data-dir data/run1 --status   # أين توقف
+python -m trading_bot.pipeline_cli --data-dir data/run1 --retry-failed
+python -m trading_bot.pipeline_cli --data-dir data/run1 --reset     # ابدأ من الصفر
+```
+
+### ضبط الفلاتر بعد الجلب مجاني تماماً
+
+الخط يخزّن **الاقتباس الخام** لا نتيجة الحكم عليه. الفرق جوهري: تشغيله ثانيةً
+بفلاتر أضيق أو أوسع يُعيد التقييم من الملف **بصفر رصيد**. لولا ذلك لبقيت
+الرموز محكوماً عليها بفلتر قديم — خطأ صامت يفسد كل ضبط لاحق.
+
+### ثلاث حالات فشل عولجت صراحةً
+
+| الحالة | السلوك |
+|---|---|
+| نفاد رصيد اليوم | توقف نظيف + حفظ الموضع (لا انهيار) |
+| حد الدقيقة | إعادة محاولة بتراجع أسّي — أما الحد اليومي فلا انتظار فيه |
+| فشل دفعة اقتباس | **لا تُخزَّن الأخطاء إطلاقاً** — تُعاد المحاولة بـ `--retry-failed` |
+
+الأخيرة كانت عيباً حقيقياً: دفعة فاشلة واحدة كانت ستحكم على 50 رمزاً بالإعدام
+الدائم في الذاكرة، فلا يُعاد جلبها أبداً.
 
 ## الترشيح المسبق — قبل إنفاق أي رصيد
 
@@ -307,6 +352,8 @@ trading_bot/
   universe.py                        بناء كون الرموز + تحذير انحياز البقاء
   prescreen.py                       الترشيح المسبق (يحمي رصيد الـ API)
   prescreen_cli.py                   سطر أوامر الترشيح
+  pipeline.py                        خط الإنتاج الخمسي بحالة محفوظة
+  pipeline_cli.py                    الأمر الواحد الذي يشغّل كل شيء
   portfolio.py                       تشغيل الكون كله وتجميع النتائج
   portfolio_cli.py                   سطر أوامر الكون الكامل
   dataquality.py                     حارس التجزئة وجودة السلاسل
@@ -325,4 +372,5 @@ tests/test_backtest.py               18 اختبار للـ backtest وجودة 
 tests/test_screener_orderflow.py     30 اختبار للمرشّح وتدفق الأوامر
 tests/test_portfolio.py              23 اختبار للكون والمحفظة
 tests/test_prescreen.py              20 اختبار للترشيح المسبق
+tests/test_pipeline.py               22 اختبار لخط الإنتاج
 ```
