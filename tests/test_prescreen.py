@@ -188,3 +188,42 @@ class TestEstimate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSweepGuards(unittest.TestCase):
+    """حماية الضبط من التفصيل على المقاس."""
+
+    def test_bonferroni_widens_with_more_arms(self):
+        from trading_bot.sweep import bonferroni_confidence
+        self.assertAlmostEqual(bonferroni_confidence(0.95, 1), 0.95, places=6)
+        self.assertGreater(bonferroni_confidence(0.95, 8), bonferroni_confidence(0.95, 2))
+        self.assertLess(bonferroni_confidence(0.95, 20), 1.0)
+
+    def test_split_series_is_chronological_and_disjoint(self):
+        from trading_bot.models import Candle
+        from trading_bot.sweep import split_series
+        candles = [Candle(i, 1, 1, 1, 1, 1) for i in range(100)]
+        first, second = split_series(candles, 0.6)
+        self.assertEqual(len(first), 60)
+        self.assertEqual(len(second), 40)
+        self.assertLess(first[-1].ts, second[0].ts)
+        self.assertEqual(len(first) + len(second), len(candles))
+
+    def test_arm_overrides_only_named_fields(self):
+        from trading_bot.config import BotConfig
+        from trading_bot.sweep import SweepArm
+        base = BotConfig(account_equity=5_000, min_avg_daily_volume=50_000)
+        tuned = SweepArm("x", {"min_avg_daily_volume": 0}).apply(base)
+        self.assertEqual(tuned.min_avg_daily_volume, 0)
+        self.assertEqual(tuned.account_equity, 5_000)
+
+    def test_arm_result_metrics(self):
+        from trading_bot.sweep import ArmResult
+        arm = ArmResult(label="t", trades=4, wins=2, r_values=[1.0, -1.0, 2.0, -1.0])
+        self.assertAlmostEqual(arm.expectancy, 0.25, places=6)
+        self.assertAlmostEqual(arm.win_rate, 0.5, places=6)
+        self.assertIsNotNone(arm.ci())
+
+    def test_ci_needs_two_values(self):
+        from trading_bot.sweep import ArmResult
+        self.assertIsNone(ArmResult(label="t", r_values=[1.0]).ci())
