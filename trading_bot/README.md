@@ -15,7 +15,7 @@
 
 ```bash
 python -m trading_bot.demo            # مثال كامل ببيانات تركيبية
-python -m unittest discover -s tests  # 128 اختبار وحدة (بلا شبكة)
+python -m unittest discover -s tests  # 148 اختبار وحدة (بلا شبكة)
 
 export TWELVE_DATA_API_KEY=xxxxxxxx   # فحص حي ببيانات Twelve Data
 python -m trading_bot.scan VSME --equity 10000
@@ -152,6 +152,48 @@ python -m trading_bot.backtest_cli AEMD --csv-4h data/AEMD_4h.csv --csv-1d data/
   قمع الفرص: no_setup 1011 | setup_no_reversal 40 | rsi_rejected 6 | confirmed 16
 ```
 
+## الترشيح المسبق — قبل إنفاق أي رصيد
+
+```bash
+# المرحلة 0 وحدها: مجانية تماماً، بلا أي طلب شبكة
+python -m trading_bot.prescreen_cli --universe data/universe_nasdaq.json \
+    --stage0-only --out data/universe_small.json
+
+# المرحلتان: رصيد واحد لكل رمز ثم حفظ الناجين
+python -m trading_bot.prescreen_cli --universe data/universe_nasdaq.json \
+    --out data/candidates.json --max-candidates 300
+
+# ثم الـ backtest على الناجين فقط
+python -m trading_bot.portfolio_cli --universe data/candidates.json --research-mode
+```
+
+### الحقيقة الاقتصادية التي تحكم التصميم (مقيسة لا مفترضة)
+
+Twelve Data تحسب الرصيد **لكل رمز لا لكل طلب**: طلب مجمّع لخمسة رموز رفع
+الاستهلاك من 1 إلى 7، **وحتى الطلب الفاشل يُخصم**. إذن التجميع يوفّر
+اتصالات لا أرصدة، والتوفير الحقيقي الوحيد هو **ألا تسأل عن الرمز أصلاً**.
+
+### ثلاث مراحل مرتّبة بالتكلفة
+
+| المرحلة | التكلفة | ما تفحصه | الأثر على ناسداك |
+|---|---|---|---|
+| **0** | **صفر رصيد** | النوع، الدولة، **طبقة السوق**، اسم الشركة | 4,509 → 1,415 |
+| **1** | رصيد/رمز | السعر، متوسط الفوليوم، الموقع من مدى 52 أسبوعاً، حركة اليوم | 1,415 → عشرات |
+| **2** | رصيدان/رمز | التاريخ الكامل (في `portfolio.py`) | الناجون فقط |
+
+**أقوى فلتر مجاني هو طبقة السوق**: NASDAQ Capital Market (`XNCM`) موطن
+الشركات الصغيرة — AEMD وVSME كلاهما هناك، بينما AAPL وMSFT وNVDA في
+Global Select (`XNGS`). التوزيع الفعلي: XNCM 1,480 | XNGS 1,259 |
+XNMS 919. فلتر واحد بلا رصيد يقصّ 60% من الكون ويُبقي بالضبط ما تستهدفه
+استراتيجية نايف.
+
+### التوفير المقاس
+
+```
+بلا ترشيح : 9,018 رصيداً — 11.3 يوم على الخطة المجانية
+مع الترشيح: 1,697 رصيداً —  2.1 يوم        ← توفير 81%
+```
+
 ## اختبار الكون الكامل (كل الأسهم)
 
 ```bash
@@ -263,6 +305,8 @@ trading_bot/
   backtest_cli.py                    تشغيل الاختبار من سطر الأوامر
   screener.py                        اختيار الأسهم وترتيبها
   universe.py                        بناء كون الرموز + تحذير انحياز البقاء
+  prescreen.py                       الترشيح المسبق (يحمي رصيد الـ API)
+  prescreen_cli.py                   سطر أوامر الترشيح
   portfolio.py                       تشغيل الكون كله وتجميع النتائج
   portfolio_cli.py                   سطر أوامر الكون الكامل
   dataquality.py                     حارس التجزئة وجودة السلاسل
@@ -280,4 +324,5 @@ tests/test_twelve_data.py            26 اختبار للمزود (بلا شبك
 tests/test_backtest.py               18 اختبار للـ backtest وجودة البيانات
 tests/test_screener_orderflow.py     30 اختبار للمرشّح وتدفق الأوامر
 tests/test_portfolio.py              23 اختبار للكون والمحفظة
+tests/test_prescreen.py              20 اختبار للترشيح المسبق
 ```

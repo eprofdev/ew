@@ -188,9 +188,13 @@ class TwelveDataProvider:
         self._limiter = _RateLimiter(max_requests_per_minute)
         self._cache: Dict[str, Tuple[float, dict]] = {}
         self.warnings: List[str] = []
+        # قياس مؤكَّد: الرصيد يُحسب لكل رمز لا لكل طلب، وحتى الطلب الفاشل
+        # يُخصم. لذلك نعدّ الرموز لا الطلبات.
+        self.credits_used: int = 0
 
     # ── طبقة الشبكة ──────────────────────────────────────────────────
-    def _request(self, path: str, params: Dict[str, object]) -> dict:
+    def _request(self, path: str, params: Dict[str, object], credits: int = 1) -> dict:
+        self.credits_used += credits
         query = dict(params)
         query["apikey"] = self.api_key
         url = f"{self.base_url}/{path}?" + urllib.parse.urlencode(query)
@@ -296,6 +300,49 @@ class TwelveDataProvider:
             self.quote_ttl,
             lambda: self._request("quote", {"symbol": ticker, "prepost": "true" if self.prepost else "false"}),
         )
+
+    def get_quotes(self, tickers: Sequence[str]) -> Dict[str, dict]:
+        """اقتباسات عدة رموز في طلب واحد.
+
+        لا يوفّر هذا رصيداً (الرصيد لكل رمز)، لكنه يقلّص عدد الاتصالات
+        وزمن الانتظار — مفيد على الخطط ذات الحد المرتفع.
+        استجابة الرمز الواحد تأتي مسطّحة، والمجمّعة تأتي مفهرسة بالرمز.
+        """
+        symbols = [t.strip().upper() for t in tickers if t and t.strip()]
+        if not symbols:
+            return {}
+        if len(symbols) == 1:
+            try:
+                return {symbols[0]: self.get_quote(symbols[0])}
+            except TwelveDataError as exc:
+                return {symbols[0]: {"error": str(exc)}}
+
+        try:
+            payload = self._request(
+                "quote",
+                {"symbol": ",".join(symbols), "prepost": "true" if self.prepost else "false"},
+                credits=len(symbols),
+            )
+        except TwelveDataError as exc:
+            # رمز واحد فاسد يُسقط الدفعة كلها — لا نُسقط الفحص معها
+            self._warn(f"فشلت دفعة من {len(symbols)} رمزاً: {exc}")
+            return {symbol: {"error": str(exc)} for symbol in symbols}
+
+        out: Dict[str, dict] = {}
+        for symbol in symbols:
+            row = payload.get(symbol)
+            if not isinstance(row, dict):
+                out[symbol] = {"error": "لا توجد بيانات في الاستجابة"}
+                continue
+            if row.get("status") == "error" or row.get("code"):
+                out[symbol] = {"error": str(row.get("message", "خطأ"))}
+            else:
+                out[symbol] = row
+        return out
+
+    def get_api_usage(self) -> dict:
+        """استهلاك الرصيد الفعلي من المزوّد (لا يُحتسب عليه رصيد)."""
+        return self._request("api_usage", {}, credits=0)
 
     def get_statistics(self, ticker: str) -> Optional[dict]:
         """/statistics — يرجع None إذا كانت الخطة لا تدعمها."""
