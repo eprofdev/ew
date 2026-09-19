@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+data/cache/
+data/*.jsonl
+data/run*/
+.env
