@@ -28,6 +28,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 from .backtest import BacktestConfig
 from .config import BotConfig
 from .pipeline import Pipeline, PipelineConfig, PipelineState
+from .briefing import BriefingBuilder
 from .sweep import SweepArm, bonferroni_confidence, run_arm
 
 # التجارب التي يعيد الضبط الذاتي فحصها. أي إضافة هنا توسّع مجال الثقة
@@ -153,9 +154,38 @@ class AutoRunner:
             self.state.last_research = today
             self._research(report)
 
+        self._build_briefing(report)
         self.state.save(self.state_path)
         self._write_report(report)
         return report
+
+    def _build_briefing(self, report: AutoReport) -> None:
+        """الموجز اليومي — المخرَج الفعلي الذي يقرؤه إنسان."""
+        candidates = self.paths["candidates"]
+        if not candidates.exists():
+            return
+        try:
+            from .briefing_cli import snapshot_for
+            from .universe import Universe
+
+            symbols = Universe.load(candidates).symbols[:60]
+            snapshots = [
+                snapshot for snapshot in
+                (snapshot_for(sym, self.paths["cache"], None) for sym in symbols)
+                if snapshot is not None
+            ]
+            if not snapshots:
+                return
+            from .engine import EnhancedTradingBot
+
+            bot = EnhancedTradingBot(self.bot_config())
+            signals = {s.ticker: bot.evaluate(s) for s in snapshots}
+            text = BriefingBuilder(self.bot_config()).build(snapshots, signals).to_markdown()
+            path = Path(self.config.data_dir) / "briefing.md"
+            path.write_text(text, encoding="utf-8")
+            report.lines.append(f"\n  الموجز اليومي: {path}")
+        except Exception as exc:  # الموجز مخرَج مساعد — لا يُسقط الدورة
+            report.lines.append(f"  تعذّر بناء الموجز: {exc}")
 
     # ── الضبط الذاتي مع بوابة الترقية ────────────────────────────────
     def _symbols(self) -> List[str]:

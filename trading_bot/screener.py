@@ -37,6 +37,10 @@ class ScreenerConfig:
     min_rvol: float = 2.0
     max_float: float = 25_000_000.0
     max_spread_pct: float = 0.06
+    # True = الفلوت المجهول يُسقط الرمز (المسار الآلي، فشل آمن).
+    # False = يمرّ مع تحذير صريح (المسار البشري: القرار لك، فلا تُحجب عنك
+    # المعلومة — لكن جهل الفلوت يبقى معروضاً كنقطة عمياء).
+    require_known_float: bool = True
 
     # ── الطبقة 2: أوزان الترتيب (المجموع 100) ────────────────────────
     weight_rvol: float = 35.0
@@ -84,9 +88,9 @@ class Screener:
             return "موقوف عن التداول"
         if not (cfg.min_price <= rt.price <= cfg.max_price):
             return f"السعر {rt.price:.2f} خارج النطاق {cfg.min_price}–{cfg.max_price}"
-        if m.free_float is None:
+        if m.free_float is None and cfg.require_known_float:
             return "الفلوت غير معروف"
-        if m.free_float > cfg.max_float:
+        if m.free_float is not None and m.free_float > cfg.max_float:
             return f"الفلوت {m.free_float:,.0f} أكبر من الحد"
         if rt.session_volume < cfg.min_session_volume:
             return f"فوليوم الجلسة {rt.session_volume:,.0f} أقل من الحد"
@@ -121,6 +125,9 @@ class Screener:
         rvol_score = min(candidate.rvol / 10.0, 1.0) * cfg.weight_rvol
         score += rvol_score
         candidate.reasons.append(f"فوليوم نسبي {candidate.rvol:.1f}×")
+
+        if m.free_float is None:
+            candidate.penalties.append("الفلوت غير معروف — تحقق منه بنفسك قبل الدخول")
 
         # ضيق الفلوت — كلما صغر زادت حدة الحركة
         if m.free_float and m.free_float > 0:
