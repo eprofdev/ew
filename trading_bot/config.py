@@ -49,6 +49,17 @@ class BotConfig:
     rejection_wick_ratio: float = 1.5      # الذيل السفلي ≥ 1.5× الجسم
     min_score_to_buy: float = 60.0
 
+    # ── الفرضية المضادة: اختراق بالزخم ───────────────────────────────
+    # "support_bounce" = استراتيجية فيصل (شراء الضعف)
+    # "breakout"       = اختراق بالزخم (شراء القوة)
+    entry_strategy: str = "support_bounce"
+    breakout_lookback: int = 20            # قمة كم شمعة يجب اختراقها
+    breakout_volume_multiple: float = 1.5  # فوليوم الاختراق ÷ متوسطه
+    breakout_trend_period: int = 50        # متوسط متحرك للسياق
+    breakout_atr_stop_multiple: float = 2.0
+    # بوابة RSI مصمَّمة لنموذج الارتكاز (شراء الضعف) ولا تناسب الاختراق
+    use_rsi_gate: bool = True
+
     # ── إدارة المخاطر ────────────────────────────────────────────────
     account_equity: float = 10_000.0
     risk_per_trade_pct: float = 0.01       # 1% من رأس المال لكل صفقة

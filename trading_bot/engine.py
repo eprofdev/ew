@@ -16,6 +16,7 @@ from .config import BotConfig
 from .models import Decision, MarketSnapshot, RealTimeData, Signal, StockMetrics
 from .risk import RiskManager
 from .strategies.faisal_price_action import FaisalPriceAction
+from .strategies.momentum_breakout import MomentumBreakout
 from .strategies.naif_safeguards import NaifSafeguards
 
 
@@ -28,7 +29,12 @@ class EnhancedTradingBot:
         self.allow_options = self.config.allow_options
         self.allow_linear_regression = self.config.allow_linear_regression
 
-        self.price_action = FaisalPriceAction(self.config)
+        # اختيار فرضية الدخول — الصمامات نفسها تنطبق على الاثنتين
+        self.price_action = (
+            MomentumBreakout(self.config)
+            if self.config.entry_strategy == "breakout"
+            else FaisalPriceAction(self.config)
+        )
         self.safeguards = NaifSafeguards(self.config)
         self.risk = RiskManager(self.config)
 
@@ -69,16 +75,17 @@ class EnhancedTradingBot:
             return signal
 
         # 3) فلاتر RSI المزدوجة (نموذج الارتكاز)
-        rsi_state = self.safeguards.validate_rsi_and_support(
-            snapshot.candles_1d,
-            snapshot.candles_4h,
-            setup.tested_support_without_high_volume_break,
-        )
-        if rsi_state != "BUY_CONFIRMED":
-            signal.decision = Decision.WATCH
-            signal.notes.append("RSI خارج نطاق الارتكاز (يومي 40-48 / 4 ساعات 48-55)")
-            return signal
-        signal.reasons.append("RSI مطابق لنموذج الارتكاز على الفريمين")
+        if self.config.use_rsi_gate:
+            rsi_state = self.safeguards.validate_rsi_and_support(
+                snapshot.candles_1d,
+                snapshot.candles_4h,
+                setup.tested_support_without_high_volume_break,
+            )
+            if rsi_state != "BUY_CONFIRMED":
+                signal.decision = Decision.WATCH
+                signal.notes.append("RSI خارج نطاق الارتكاز (يومي 40-48 / 4 ساعات 48-55)")
+                return signal
+            signal.reasons.append("RSI مطابق لنموذج الارتكاز على الفريمين")
 
         # 4) تقفيل الشورت: مضاعِف قوة وليس سبباً وحيداً
         short_state = self.check_short_cover_signal(snapshot.ticker, snapshot.realtime)
